@@ -1,7 +1,6 @@
 """Reusable custom UI widgets."""
 
 from PyQt6.QtWidgets import QComboBox, QLabel, QWidget
-from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt
 
 from ..gcode.grbl_versions import GRBL_VERSIONS
