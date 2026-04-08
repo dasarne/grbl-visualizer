@@ -54,5 +54,5 @@ class SettingsDialog(QDialog):
         self._feature_table.setRowCount(len(commands))
         for row, cmd in enumerate(commands):
             self._feature_table.setItem(row, 0, QTableWidgetItem(cmd))
-            supported = "✅" if cmd not in version.unsupported_commands else "❌"
+            supported = "✅" if cmd in version.supported_commands else "❌"
             self._feature_table.setItem(row, 1, QTableWidgetItem(supported))

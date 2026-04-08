@@ -31,14 +31,17 @@ class StatusIndicator(QLabel):
         super().__init__(text, parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-    def set_ok(self) -> None:
-        """Display a green OK status."""
+    def set_ok(self, message: str = "OK") -> None:
+        """Display a green OK status with a text and icon indicator."""
+        self.setText(f"● {message}")
         self.setStyleSheet("color: green; font-weight: bold;")
 
-    def set_warning(self) -> None:
-        """Display an amber warning status."""
+    def set_warning(self, message: str = "Warning") -> None:
+        """Display an amber warning status with a text and icon indicator."""
+        self.setText(f"▲ {message}")
         self.setStyleSheet("color: orange; font-weight: bold;")
 
-    def set_error(self) -> None:
-        """Display a red error status."""
+    def set_error(self, message: str = "Error") -> None:
+        """Display a red error status with a text and icon indicator."""
+        self.setText(f"✕ {message}")
         self.setStyleSheet("color: red; font-weight: bold;")

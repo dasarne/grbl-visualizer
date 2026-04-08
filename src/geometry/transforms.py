@@ -4,7 +4,7 @@ from enum import Enum, auto
 
 
 class CoordinateSystem(Enum):
-    """Motion mode for coordinate interpretation."""
+    """Coordinate system mode for position interpretation."""
 
     ABSOLUTE = auto()
     INCREMENTAL = auto()
