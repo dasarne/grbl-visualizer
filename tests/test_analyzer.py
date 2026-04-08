@@ -4,7 +4,7 @@ from src.analyzer.analyzer import GCodeAnalyzer, WarningSeverity, AnalysisWarnin
 
 
 def test_analyzer_initialization():
-    """GCodeAnalyzer should initialise without errors."""
+    """GCodeAnalyzer should initialize without errors."""
     analyzer = GCodeAnalyzer("1.1H")
     assert analyzer.version_id == "1.1H"
 
@@ -17,7 +17,7 @@ def test_warning_severity_enum():
 
 
 def test_analysis_warning_dataclass():
-    """AnalysisWarning must be constructable with expected fields."""
+    """AnalysisWarning must be constructible with expected fields."""
     warning = AnalysisWarning(
         severity=WarningSeverity.WARNING,
         message="Test warning",

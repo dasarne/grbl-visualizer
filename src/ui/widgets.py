@@ -25,7 +25,7 @@ class LineNumberBar(QWidget):
 
 
 class StatusIndicator(QLabel):
-    """A coloured status label for showing connection/parse state."""
+    """A colored status label for showing connection/parse state."""
 
     def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
         super().__init__(text, parent)

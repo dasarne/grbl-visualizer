@@ -19,7 +19,7 @@ def test_all_commands_not_empty():
 
 
 def test_grbl_command_dataclass():
-    """GRBLCommand must be constructable and expose its fields."""
+    """GRBLCommand must be constructible and expose its fields."""
     cmd = GRBLCommand(code="G1", description="Linear interpolation", supported_versions=["1.1H"])
     assert cmd.code == "G1"
     assert cmd.description == "Linear interpolation"

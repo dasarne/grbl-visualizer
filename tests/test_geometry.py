@@ -13,7 +13,7 @@ def test_bounding_box_properties():
 
 
 def test_path_segment_creation():
-    """PathSegment must be constructable with expected field values."""
+    """PathSegment must be constructible with expected field values."""
     seg = PathSegment(
         type=PathType.CUT,
         start_x=0.0, start_y=0.0, start_z=0.0,

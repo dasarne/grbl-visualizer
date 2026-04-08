@@ -4,7 +4,7 @@ from src.gcode.parser import GCodeParser, GCodeLine, GCodeProgram
 
 
 def test_parser_initialization():
-    """GCodeParser should initialise without errors."""
+    """GCodeParser should initialize without errors."""
     parser = GCodeParser("1.1H")
     assert parser.version_id == "1.1H"
 
@@ -17,7 +17,7 @@ def test_parse_line_stub():
 
 
 def test_gcode_program_dataclass():
-    """GCodeProgram must initialise with defaults."""
+    """GCodeProgram must initialize with defaults."""
     program = GCodeProgram()
     assert program.lines == []
     assert program.filename is None
