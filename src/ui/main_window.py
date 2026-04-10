@@ -2,7 +2,6 @@
 
 from PyQt6.QtWidgets import (
     QFileDialog,
-    QHBoxLayout,
     QLabel,
     QMainWindow,
     QSplitter,
@@ -14,6 +13,8 @@ from PyQt6.QtCore import Qt
 from .editor_panel import EditorPanel
 from .canvas_panel import CanvasPanel
 from ..gcode.grbl_versions import GRBL_VERSIONS, DEFAULT_VERSION
+from ..gcode.parser import GCodeParser
+from ..analyzer.analyzer import GCodeAnalyzer, WarningSeverity
 
 
 class MainWindow(QMainWindow):
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
         from .widgets import GRBLVersionSelector
         self._version_selector = GRBLVersionSelector()
         self._version_selector.setCurrentText(self._current_version)
+        self._version_selector.currentTextChanged.connect(self._on_version_changed)
         toolbar.addWidget(self._version_selector)
 
     def _setup_statusbar(self) -> None:
@@ -78,7 +80,7 @@ class MainWindow(QMainWindow):
         self._canvas_panel.segment_selected.connect(self._on_canvas_segment_selected)
 
     def open_file(self) -> None:
-        """Open a G-Code file via a file dialog."""
+        """Open a G-Code file, parse it, analyse it, and display warnings."""
         path, _ = QFileDialog.getOpenFileName(
             self,
             "Open G-Code File",
@@ -88,8 +90,39 @@ class MainWindow(QMainWindow):
         if path:
             with open(path, "r", encoding="utf-8") as fh:
                 content = fh.read()
-            self._editor_panel.load_content(content)
-            self.statusBar().showMessage(f"Loaded: {path}")
+            self._load_content(content, label=path)
+
+    def _load_content(self, content: str, label: str = "") -> None:
+        """Parse content, run analysis, and update all UI panels."""
+        self._editor_panel.load_content(content)
+
+        parser = GCodeParser(version_id=self._current_version)
+        program = parser.parse_text(content)
+
+        analyzer = GCodeAnalyzer(version_id=self._current_version)
+        warnings = analyzer.analyze(program)
+
+        self._editor_panel.mark_warning_lines(warnings)
+        self._canvas_panel.show_warnings(warnings)
+
+        error_count = sum(1 for w in warnings if w.severity == WarningSeverity.ERROR)
+        warning_count = sum(1 for w in warnings if w.severity == WarningSeverity.WARNING)
+
+        parts: list[str] = []
+        if label:
+            parts.append(f"Loaded: {label}")
+        if error_count:
+            parts.append(f"{error_count} error(s)")
+        if warning_count:
+            parts.append(f"{warning_count} warning(s)")
+        if not error_count and not warning_count:
+            parts.append("No issues found")
+
+        self.statusBar().showMessage("  |  ".join(parts))
+
+    def _on_version_changed(self, version_id: str) -> None:
+        """Re-run analysis when the GRBL version selector changes."""
+        self._current_version = version_id
 
     def _on_editor_line_selected(self, line_number: int) -> None:
         """Highlight the canvas segment corresponding to the selected editor line.

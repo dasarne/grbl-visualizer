@@ -1,7 +1,16 @@
 """G-Code editor panel."""
 
 from PyQt6.QtWidgets import QVBoxLayout, QPlainTextEdit, QWidget
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtGui import QTextCharFormat, QColor, QTextCursor
+
+from ..analyzer.analyzer import AnalysisWarning, WarningSeverity
+
+_SEVERITY_COLORS: dict[WarningSeverity, str] = {
+    WarningSeverity.ERROR: "#FFCCCC",
+    WarningSeverity.WARNING: "#FFF3CC",
+    WarningSeverity.INFO: "#CCE5FF",
+}
 
 
 class EditorPanel(QWidget):
@@ -28,8 +37,47 @@ class EditorPanel(QWidget):
         self._text_edit.setPlainText(content)
 
     def highlight_line(self, line_number: int) -> None:
-        """Scroll to and highlight the given 1-based line number.
+        """Scroll to and highlight the given 1-based line number."""
+        doc = self._text_edit.document()
+        block = doc.findBlockByLineNumber(line_number - 1)
+        if not block.isValid():
+            return
+        cursor = QTextCursor(block)
+        self._text_edit.setTextCursor(cursor)
+        self._text_edit.centerCursor()
 
-        TODO: Implement QTextCursor-based line highlighting.
+    def mark_warning_lines(self, warnings: list[AnalysisWarning]) -> None:
+        """Apply background colour highlights to lines that carry warnings.
+
+        ERROR lines get a red tint; WARNING lines get an amber tint.
+        Call after load_content() to apply warning decorations.
         """
-        pass
+        # Build a mapping from 1-based line number to the most-severe warning.
+        line_severity: dict[int, WarningSeverity] = {}
+        for w in warnings:
+            if w.line_number is None:
+                continue
+            existing = line_severity.get(w.line_number)
+            if existing is None or w.severity.value > existing.value:
+                line_severity[w.line_number] = w.severity
+
+        if not line_severity:
+            return
+
+        doc = self._text_edit.document()
+        cursor = QTextCursor(doc)
+        cursor.beginEditBlock()
+
+        for line_number, severity in line_severity.items():
+            block = doc.findBlockByLineNumber(line_number - 1)
+            if not block.isValid():
+                continue
+
+            fmt = QTextCharFormat()
+            fmt.setBackground(QColor(_SEVERITY_COLORS[severity]))
+
+            block_cursor = QTextCursor(block)
+            block_cursor.select(QTextCursor.SelectionType.LineUnderCursor)
+            block_cursor.mergeCharFormat(fmt)
+
+        cursor.endEditBlock()
