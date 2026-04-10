@@ -16,6 +16,7 @@ from .comment_panel import CommentPanel
 from ..gcode.grbl_versions import GRBL_VERSIONS, DEFAULT_VERSION
 from ..gcode.parser import GCodeParser
 from ..analyzer.analyzer import GCodeAnalyzer, WarningSeverity
+from ..geometry.path import build_toolpath
 
 
 class MainWindow(QMainWindow):
@@ -110,6 +111,9 @@ class MainWindow(QMainWindow):
         self._editor_panel.mark_warning_lines(warnings)
         self._canvas_panel.show_warnings(warnings)
 
+        toolpath = build_toolpath(program)
+        self._canvas_panel.render_toolpath(toolpath)
+
         # Populate the comment strip with every line that carries a comment.
         comments = [
             (line.line_number, line.comment)
@@ -138,15 +142,9 @@ class MainWindow(QMainWindow):
         self._current_version = version_id
 
     def _on_editor_line_selected(self, line_number: int) -> None:
-        """Highlight the canvas segment corresponding to the selected editor line.
-
-        TODO: Retrieve toolpath and call canvas highlight.
-        """
+        """Highlight the canvas segment corresponding to the selected editor line."""
         self._canvas_panel.highlight_segment(line_number)
 
     def _on_canvas_segment_selected(self, line_number: int) -> None:
-        """Scroll the editor to the line corresponding to the selected canvas segment.
-
-        TODO: Map segment back to line number and call editor highlight.
-        """
+        """Scroll the editor to the line corresponding to the selected canvas segment."""
         self._editor_panel.highlight_line(line_number)
