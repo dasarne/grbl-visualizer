@@ -5,9 +5,24 @@ from enum import Enum, auto
 
 from ..gcode.commands import ALL_COMMANDS
 from ..gcode.grbl_versions import get_version
+from ..geometry.bounds import (
+    calculate_bounds,
+    infer_xy_origin,
+    infer_z_origin,
+    XYOrigin,
+    ZOrigin,
+)
 
 # G-code commands that require a positive feedrate (non-rapid feed moves).
 _FEED_MOVE_COMMANDS = frozenset({"G1", "G2", "G3"})
+
+_XY_ORIGIN_LABELS: dict[XYOrigin, str] = {
+    XYOrigin.BOTTOM_LEFT: "bottom-left (X≥0, Y≥0)",
+    XYOrigin.TOP_LEFT: "top-left (X≥0, Y≤0)",
+    XYOrigin.BOTTOM_RIGHT: "bottom-right (X≤0, Y≥0)",
+    XYOrigin.TOP_RIGHT: "top-right (X≤0, Y≤0)",
+    XYOrigin.CENTER: "center or custom (mixed X/Y signs)",
+}
 
 
 class WarningSeverity(Enum):
@@ -39,6 +54,7 @@ class GCodeAnalyzer:
         warnings: list[AnalysisWarning] = []
         warnings.extend(self._check_version_compatibility(program))
         warnings.extend(self._check_feed_rates(program))
+        warnings.extend(self._check_workpiece_geometry(program))
         return warnings
 
     def _check_version_compatibility(self, program) -> list[AnalysisWarning]:
@@ -111,3 +127,75 @@ class GCodeAnalyzer:
                 ))
 
         return warnings
+
+    def _check_workpiece_geometry(self, program) -> list[AnalysisWarning]:
+        """Emit INFO hints about workpiece size and coordinate-origin placement.
+
+        Computes the bounding box of all motion coordinates, then infers:
+        * Required workpiece dimensions in X, Y, and Z (thickness).
+        * Whether the XY origin is at a corner (bottom-left, top-left, …)
+          or inside the workpiece.
+        * Whether the Z origin is on the workpiece surface or on the
+          sacrificial plate (spoilboard).
+        """
+        bounds = calculate_bounds(program)
+        if bounds is None:
+            return []
+
+        hints: list[AnalysisWarning] = []
+
+        # --- Workpiece X/Y dimensions ---
+        hints.append(AnalysisWarning(
+            severity=WarningSeverity.INFO,
+            message=(
+                f"Workpiece size: {bounds.width:.2f} mm (X) × {bounds.height:.2f} mm (Y)"
+            ),
+            suggestion="Ensure your stock is at least this large in X and Y.",
+        ))
+
+        # --- Workpiece thickness (Z extent) ---
+        hints.append(AnalysisWarning(
+            severity=WarningSeverity.INFO,
+            message=(
+                f"Z range: {bounds.min_z:.2f} to {bounds.max_z:.2f} mm "
+                f"(thickness: {bounds.depth:.2f} mm)"
+            ),
+            suggestion="Verify that your workpiece is at least this thick.",
+        ))
+
+        # --- XY origin corner ---
+        xy_origin = infer_xy_origin(bounds)
+        hints.append(AnalysisWarning(
+            severity=WarningSeverity.INFO,
+            message=(
+                f"XY origin appears to be at the "
+                f"{_XY_ORIGIN_LABELS[xy_origin]} corner of the workpiece."
+            ),
+            suggestion="Set your machine zero to match this position before running.",
+        ))
+
+        # --- Z origin placement ---
+        z_origin = infer_z_origin(bounds)
+        if z_origin == ZOrigin.SPOILBOARD:
+            hints.append(AnalysisWarning(
+                severity=WarningSeverity.INFO,
+                message="Z origin appears to be on the spoilboard (all Z ≥ 0).",
+                suggestion="Touch off Z on the spoilboard surface.",
+            ))
+        elif z_origin == ZOrigin.WORKPIECE_SURFACE:
+            hints.append(AnalysisWarning(
+                severity=WarningSeverity.INFO,
+                message=(
+                    "Z origin appears to be on the workpiece surface "
+                    "(Z > 0 = safe height, Z < 0 = cut depth)."
+                ),
+                suggestion="Touch off Z on the top face of the workpiece.",
+            ))
+        else:
+            hints.append(AnalysisWarning(
+                severity=WarningSeverity.INFO,
+                message="Z origin placement is ambiguous (all Z ≤ 0).",
+                suggestion="Verify your Z zero position before running.",
+            ))
+
+        return hints

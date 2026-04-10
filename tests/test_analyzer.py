@@ -146,11 +146,79 @@ def test_sample_gcode_no_feed_warnings(sample_gcode):
     assert feed_warnings == []
 
 
+
 # ---------------------------------------------------------------------------
-# analyze() aggregation
+# Workpiece geometry INFO hints
 # ---------------------------------------------------------------------------
 
-def test_analyze_aggregates_both_checks():
+def test_workpiece_geometry_info_produced(sample_gcode):
+    """analyze() must produce INFO hints for a program with motion commands."""
+    warnings = _analyze(sample_gcode)
+    infos = _by_severity(warnings, WarningSeverity.INFO)
+    assert len(infos) >= 1
+
+
+def test_workpiece_size_hint_present(sample_gcode):
+    """An INFO hint about workpiece X/Y dimensions must be present."""
+    warnings = _analyze(sample_gcode)
+    assert any("Workpiece size" in w.message for w in warnings)
+
+
+def test_workpiece_z_range_hint_present(sample_gcode):
+    """An INFO hint about the Z range must be present."""
+    warnings = _analyze(sample_gcode)
+    assert any("Z range" in w.message for w in warnings)
+
+
+def test_workpiece_xy_origin_hint_present(sample_gcode):
+    """An INFO hint about the XY origin corner must be present."""
+    warnings = _analyze(sample_gcode)
+    assert any("XY origin" in w.message for w in warnings)
+
+
+def test_workpiece_z_origin_hint_present(sample_gcode):
+    """An INFO hint about Z origin placement must be present."""
+    warnings = _analyze(sample_gcode)
+    assert any("Z origin" in w.message for w in warnings)
+
+
+def test_workpiece_xy_origin_bottom_left(sample_gcode):
+    """sample_gcode has all X≥0, Y≥0 — origin should be inferred as bottom-left."""
+    warnings = _analyze(sample_gcode)
+    xy_hints = [w for w in warnings if "XY origin" in w.message]
+    assert len(xy_hints) == 1
+    assert "bottom-left" in xy_hints[0].message
+
+
+def test_workpiece_z_origin_workpiece_surface(sample_gcode):
+    """sample_gcode has Z5 (safe) and Z-1 (cut) — should detect workpiece surface."""
+    warnings = _analyze(sample_gcode)
+    z_hints = [w for w in warnings if "Z origin" in w.message]
+    assert len(z_hints) == 1
+    assert "workpiece surface" in z_hints[0].message.lower()
+
+
+def test_workpiece_geometry_no_info_for_empty_program():
+    """A program with no motion lines must produce no geometry INFO hints."""
+    warnings = _analyze("G21\nG90\nM30\n")
+    assert not any(w.severity == WarningSeverity.INFO for w in warnings)
+
+
+def test_workpiece_z_origin_spoilboard():
+    """All-positive Z values must be recognised as spoilboard origin."""
+    gcode = "G0 X0 Y0 Z20\nG1 X50 Y0 Z5 F300\nG0 Z20\n"
+    warnings = _analyze(gcode)
+    z_hints = [w for w in warnings if "Z origin" in w.message]
+    assert len(z_hints) == 1
+    assert "spoilboard" in z_hints[0].message.lower()
+
+
+def test_workpiece_xy_origin_top_left():
+    """X≥0, Y≤0 — origin should be top-left."""
+    gcode = "G0 X0 Y0 Z5\nG1 X50 Y-30 Z-2 F300\nG0 Z5\n"
+    warnings = _analyze(gcode)
+    xy_hints = [w for w in warnings if "XY origin" in w.message]
+    assert "top-left" in xy_hints[0].message
     """analyze() must return warnings from both compatibility and feed checks."""
     gcode = "G81 X5\nG1 X10\n"
     warnings = _analyze(gcode)
