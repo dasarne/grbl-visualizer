@@ -31,9 +31,18 @@
 ```bash
 git clone https://github.com/dasarne/grbl-visualizer.git
 cd grbl-visualizer
+
+# Create and activate a virtual environment (required on Arch Linux and
+# any distribution that enforces PEP 668 / externally-managed-environment)
+python3 -m venv .venv
+source .venv/bin/activate
+
 pip install -r requirements.txt
 python -m src.main
 ```
+
+> **Arch Linux note:** Arch enforces the "externally managed environment" policy (PEP 668),
+> which prevents system-wide `pip install`.  Always activate the `.venv` first.
 
 ## Architecture Overview
 

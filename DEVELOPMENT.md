@@ -2,14 +2,18 @@
 
 ## Environment Setup
 
+> **Arch Linux / PEP 668:** Arch (and other modern distributions) enforce the
+> "externally managed environment" policy which blocks system-wide `pip install`.
+> You **must** use a virtual environment.  The steps below work on all platforms.
+
 ```bash
 # 1. Clone the repository
 git clone https://github.com/dasarne/grbl-visualizer.git
 cd grbl-visualizer
 
 # 2. Create a virtual environment (pyenv recommended)
-python3.10 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate   # on Windows: .venv\Scripts\activate
 
 # 3. Install all dependencies
 pip install -r requirements.txt
