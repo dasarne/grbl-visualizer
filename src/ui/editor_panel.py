@@ -30,6 +30,7 @@ class EditorPanel(QWidget):
         self._text_edit = QPlainTextEdit()
         self._text_edit.setReadOnly(True)
         self._text_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self._text_edit.cursorPositionChanged.connect(self._on_cursor_moved)
         layout.addWidget(self._text_edit)
 
     def load_content(self, content: str) -> None:
@@ -81,3 +82,8 @@ class EditorPanel(QWidget):
             block_cursor.mergeCharFormat(fmt)
 
         cursor.endEditBlock()
+
+    def _on_cursor_moved(self) -> None:
+        """Emit the current 1-based line number whenever the cursor moves."""
+        line_number = self._text_edit.textCursor().blockNumber() + 1
+        self.line_selected.emit(line_number)

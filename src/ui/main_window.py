@@ -12,6 +12,7 @@ from PyQt6.QtCore import Qt
 
 from .editor_panel import EditorPanel
 from .canvas_panel import CanvasPanel
+from .comment_panel import CommentPanel
 from ..gcode.grbl_versions import GRBL_VERSIONS, DEFAULT_VERSION
 from ..gcode.parser import GCodeParser
 from ..analyzer.analyzer import GCodeAnalyzer, WarningSeverity
@@ -26,6 +27,7 @@ class MainWindow(QMainWindow):
         self.resize(1200, 800)
 
         self._editor_panel = EditorPanel()
+        self._comment_panel = CommentPanel()
         self._canvas_panel = CanvasPanel()
         self._current_version = DEFAULT_VERSION
 
@@ -36,11 +38,12 @@ class MainWindow(QMainWindow):
         self._connect_signals()
 
     def _setup_ui(self) -> None:
-        """Build the central splitter layout."""
+        """Build the central three-pane splitter layout."""
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._editor_panel)
+        splitter.addWidget(self._comment_panel)
         splitter.addWidget(self._canvas_panel)
-        splitter.setSizes([500, 700])
+        splitter.setSizes([480, 220, 700])
         self.setCentralWidget(splitter)
 
     def _setup_menu(self) -> None:
@@ -75,8 +78,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
     def _connect_signals(self) -> None:
-        """Wire editor ↔ canvas bidirectional signals."""
+        """Wire editor ↔ comment panel ↔ canvas bidirectional signals."""
         self._editor_panel.line_selected.connect(self._on_editor_line_selected)
+        self._editor_panel.line_selected.connect(self._comment_panel.set_current_line)
+        self._comment_panel.comment_selected.connect(self._editor_panel.highlight_line)
         self._canvas_panel.segment_selected.connect(self._on_canvas_segment_selected)
 
     def open_file(self) -> None:
@@ -104,6 +109,14 @@ class MainWindow(QMainWindow):
 
         self._editor_panel.mark_warning_lines(warnings)
         self._canvas_panel.show_warnings(warnings)
+
+        # Populate the comment strip with every line that carries a comment.
+        comments = [
+            (line.line_number, line.comment)
+            for line in program.lines
+            if line.comment
+        ]
+        self._comment_panel.load_comments(comments)
 
         error_count = sum(1 for w in warnings if w.severity == WarningSeverity.ERROR)
         warning_count = sum(1 for w in warnings if w.severity == WarningSeverity.WARNING)

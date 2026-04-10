@@ -219,6 +219,13 @@ def test_workpiece_xy_origin_top_left():
     warnings = _analyze(gcode)
     xy_hints = [w for w in warnings if "XY origin" in w.message]
     assert "top-left" in xy_hints[0].message
+
+
+# ---------------------------------------------------------------------------
+# analyze() aggregation
+# ---------------------------------------------------------------------------
+
+def test_analyze_aggregates_both_checks():
     """analyze() must return warnings from both compatibility and feed checks."""
     gcode = "G81 X5\nG1 X10\n"
     warnings = _analyze(gcode)
@@ -226,3 +233,30 @@ def test_workpiece_xy_origin_top_left():
     feed_warnings = [w for w in warnings if "G1" in w.message or "feedrate" in w.message.lower() or "feed" in w.message.lower()]
     assert len(errors) >= 1      # G81 unsupported
     assert len(feed_warnings) >= 1  # G1 no feedrate
+
+
+# ---------------------------------------------------------------------------
+# Comment extraction (used by CommentPanel)
+# ---------------------------------------------------------------------------
+
+def test_comment_extraction_semicolon(sample_gcode):
+    """Every semicolon comment in sample_gcode must be captured."""
+    from src.gcode.parser import GCodeParser
+    program = GCodeParser("1.1H").parse_text(sample_gcode)
+    comments = [(l.line_number, l.comment) for l in program.lines if l.comment]
+    assert len(comments) == len(sample_gcode.splitlines())  # every line has a comment
+
+
+def test_comment_extraction_parenthetical():
+    """Parenthetical (inline) comments must be captured."""
+    from src.gcode.parser import GCodeParser
+    program = GCodeParser("1.1H").parse_text("G0 X0 Y0 (move to origin)\n")
+    line = program.lines[0]
+    assert line.comment == "move to origin"
+
+
+def test_comment_extraction_no_comment():
+    """Lines with no comment must have comment=None."""
+    from src.gcode.parser import GCodeParser
+    program = GCodeParser("1.1H").parse_text("G1 X10 F500\n")
+    assert program.lines[0].comment is None
