@@ -27,8 +27,8 @@ class PathSegment:
     end_z: float
     line_number: int
     feed_rate: float = 0.0
-    # Interpolated arc waypoints (x, y); None for linear segments.
-    arc_points: list[tuple[float, float]] | None = field(default=None)
+    # Interpolated arc waypoints (x, y, z); None for linear segments.
+    arc_points: list[tuple[float, float, float]] | None = field(default=None)
 
 
 class ToolPath:
@@ -171,15 +171,24 @@ def build_toolpath(program) -> ToolPath:
                 continue
 
         # Interpolate arcs; linear moves have no arc_points.
-        arc_pts: list[tuple[float, float]] | None = None
+        arc_pts: list[tuple[float, float, float]] | None = None
         if cur_motion in _ARC_COMMANDS:
             i_off = line.parameters.get('I', 0.0)
             j_off = line.parameters.get('J', 0.0)
-            arc_pts = _interpolate_arc(
+            xy_pts = _interpolate_arc(
                 cur_x, cur_y, new_x, new_y,
                 i_off, j_off,
                 cw=(cur_motion == "G2"),
             )
+            n = len(xy_pts)
+            arc_pts = [
+                (
+                    xy_pts[k][0],
+                    xy_pts[k][1],
+                    cur_z + (new_z - cur_z) * k / (n - 1) if n > 1 else cur_z,
+                )
+                for k in range(n)
+            ]
 
         toolpath.add_segment(PathSegment(
             type=_MOTION_COMMANDS[cur_motion],

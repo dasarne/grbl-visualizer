@@ -4,6 +4,7 @@ import matplotlib.cm as _cm
 import matplotlib.colors as _mcolors
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  – registers the '3d' projection
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 from PyQt6.QtCore import pyqtSignal, Qt
 
@@ -51,7 +52,7 @@ class CanvasPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
 
         self._figure = Figure(tight_layout=True)
-        self._axes = self._figure.add_subplot(111)
+        self._axes = self._figure.add_subplot(111, projection="3d")
         self._mpl_canvas = FigureCanvasQTAgg(self._figure)
 
         self._nav_toolbar = NavigationToolbar2QT(self._mpl_canvas, self)
@@ -71,15 +72,12 @@ class CanvasPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _draw_coordinate_system(self) -> None:
-        """Draw X/Y axis lines through the origin, a grid, and axis labels."""
+        """Draw axis labels, origin marker, and enable the grid for the 3-D view."""
         ax = self._axes
-        ax.axhline(0, color="#888888", linewidth=0.8, zorder=1)
-        ax.axvline(0, color="#888888", linewidth=0.8, zorder=1)
-        ax.plot(0, 0, "r+", markersize=10, markeredgewidth=1.5, zorder=5)
+        ax.plot([0], [0], [0], "r+", markersize=10, markeredgewidth=1.5, zorder=5)
         ax.set_xlabel("X [mm]", fontsize=9)
         ax.set_ylabel("Y [mm]", fontsize=9)
-        ax.set_aspect("equal", adjustable="datalim")
-        ax.grid(True, linestyle=":", linewidth=0.5, color="#CCCCCC", zorder=0)
+        ax.set_zlabel("Z [mm]", fontsize=9)  # type: ignore[attr-defined]
         ax.tick_params(labelsize=8)
 
     def _draw_empty_canvas(self) -> None:
@@ -88,6 +86,7 @@ class CanvasPanel(QWidget):
         self._draw_coordinate_system()
         self._axes.set_xlim(*_DEFAULT_VIEW)
         self._axes.set_ylim(*_DEFAULT_VIEW)
+        self._axes.set_zlim(*_DEFAULT_VIEW)  # type: ignore[attr-defined]
         self._mpl_canvas.draw()
 
     # ------------------------------------------------------------------
@@ -171,16 +170,18 @@ class CanvasPanel(QWidget):
             # Choose line style.
             linestyle = _RAPID_LINESTYLE if seg.type == PathType.RAPID else "-"
 
-            # Build coordinate arrays: use arc waypoints when available.
+            # Build coordinate arrays: use arc waypoints (3-tuples) when available.
             if seg.arc_points:
                 xs = [p[0] for p in seg.arc_points]
                 ys = [p[1] for p in seg.arc_points]
+                zs = [p[2] for p in seg.arc_points]
             else:
                 xs = [seg.start_x, seg.end_x]
                 ys = [seg.start_y, seg.end_y]
+                zs = [seg.start_z, seg.end_z]
 
             self._axes.plot(
-                xs, ys,
+                xs, ys, zs,
                 color=color,
                 linewidth=lw,
                 linestyle=linestyle,
@@ -200,25 +201,31 @@ class CanvasPanel(QWidget):
         self._mpl_canvas.draw()
 
     def _fit_view(self) -> None:
-        """Auto-scale the view to include all segments (including arc waypoints) and the origin."""
+        """Auto-scale the 3-D view to include all segments (including arc waypoints) and origin."""
         if not self._toolpath or not self._toolpath.segments:
             return
 
         all_x: list[float] = [0.0]
         all_y: list[float] = [0.0]
+        all_z: list[float] = [0.0]
 
         for s in self._toolpath.segments:
             if s.arc_points:
                 all_x.extend(p[0] for p in s.arc_points)
                 all_y.extend(p[1] for p in s.arc_points)
+                all_z.extend(p[2] for p in s.arc_points)
             else:
                 all_x.extend([s.start_x, s.end_x])
                 all_y.extend([s.start_y, s.end_y])
+                all_z.extend([s.start_z, s.end_z])
 
         span_x = max(max(all_x) - min(all_x), 1.0)
         span_y = max(max(all_y) - min(all_y), 1.0)
+        span_z = max(max(all_z) - min(all_z), 1.0)
         mx = max(span_x * 0.05, 2.0)
         my = max(span_y * 0.05, 2.0)
+        mz = max(span_z * 0.05, 2.0)
 
         self._axes.set_xlim(min(all_x) - mx, max(all_x) + mx)
         self._axes.set_ylim(min(all_y) - my, max(all_y) + my)
+        self._axes.set_zlim(min(all_z) - mz, max(all_z) + mz)  # type: ignore[attr-defined]
