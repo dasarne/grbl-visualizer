@@ -112,8 +112,31 @@ class GCodeParser:
     def validate_program(self, program: GCodeProgram) -> list[str]:
         """Validate a parsed program against the selected GRBL version.
 
-        Returns a list of warning strings.
+        Returns a list of warning strings — one per unsupported or unknown
+        command found in ``program``.
 
-        TODO: Implement version-specific command validation.
+        Two categories are reported:
+        * Commands unknown to GRBL at all (e.g. G81 drilling cycles).
+        * Commands that exist in GRBL but are disabled for the selected
+          firmware variant (e.g. G38.2 probing on GRBL 1.1H).
         """
-        return []
+        from ..gcode.commands import ALL_COMMANDS
+        from ..gcode.grbl_versions import get_version
+
+        warnings: list[str] = []
+        version = get_version(self.version_id)
+
+        for line in program.lines:
+            cmd = line.command
+            if cmd is None:
+                continue
+            if cmd not in ALL_COMMANDS:
+                warnings.append(
+                    f"Line {line.line_number}: {cmd} is not a recognised GRBL command."
+                )
+            elif cmd in version.unsupported_commands:
+                warnings.append(
+                    f"Line {line.line_number}: {cmd} is not supported by GRBL {self.version_id}."
+                )
+
+        return warnings

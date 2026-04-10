@@ -54,6 +54,7 @@ class GCodeAnalyzer:
         warnings: list[AnalysisWarning] = []
         warnings.extend(self._check_version_compatibility(program))
         warnings.extend(self._check_feed_rates(program))
+        warnings.extend(self._check_missing_origin(program))
         warnings.extend(self._check_workpiece_geometry(program))
         return warnings
 
@@ -91,11 +92,53 @@ class GCodeAnalyzer:
         return warnings
 
     def _check_missing_origin(self, program) -> list[AnalysisWarning]:
-        """Warn if no explicit origin (G92 or G0 X0 Y0) is set.
+        """Warn if no explicit work-coordinate origin is established.
 
-        TODO: Implement origin detection heuristic.
+        An origin is considered established when the program contains any of:
+
+        * A ``G92`` (Set coordinate offset) command.
+        * A ``G0`` or ``G1`` move that explicitly names both ``X0`` and ``Y0``
+          (i.e. a homing move to the work origin before cutting).
+
+        If neither pattern is found and the program has at least one motion
+        command, an INFO hint is emitted reminding the operator to zero the
+        machine before running.
         """
-        return []
+        has_motion = False
+        for line in program.lines:
+            cmd = line.command
+            if cmd is None:
+                continue
+
+            # G92 explicitly sets a coordinate-system offset — origin is defined.
+            if cmd == "G92":
+                return []
+
+            if cmd in ("G0", "G00", "G1", "G01", "G2", "G02", "G3", "G03",
+                       "G38.2", "G38.3", "G38.4", "G38.5"):
+                has_motion = True
+                params = line.parameters
+                # A move to X0 Y0 (either axis may be absent if already at 0,
+                # but both must be explicitly zero or already zero).
+                x_at_zero = params.get('X', None) == 0.0
+                y_at_zero = params.get('Y', None) == 0.0
+                if x_at_zero and y_at_zero:
+                    return []
+
+        if not has_motion:
+            return []
+
+        return [AnalysisWarning(
+            severity=WarningSeverity.INFO,
+            message=(
+                "No explicit work-coordinate origin found (no G92 and no "
+                "G0/G1 X0 Y0 move). Ensure the machine is zeroed before running."
+            ),
+            suggestion=(
+                "Add 'G92 X0 Y0 Z0' at the start of the program, or jog the "
+                "machine to the work origin and zero it before running."
+            ),
+        )]
 
     def _check_feed_rates(self, program) -> list[AnalysisWarning]:
         """Warn about missing or zero feed rates on cut moves (G1/G2/G3)."""

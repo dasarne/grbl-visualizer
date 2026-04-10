@@ -1,5 +1,6 @@
 """Tests for geometry modules."""
 
+import math
 import pytest
 from src.geometry.bounds import (
     BoundingBox,
@@ -10,7 +11,8 @@ from src.geometry.bounds import (
     infer_z_origin,
     format_bounds_info,
 )
-from src.geometry.path import PathSegment, PathType, ToolPath
+from src.geometry.path import PathSegment, PathType, ToolPath, build_toolpath, _interpolate_arc
+from src.geometry.transforms import apply_work_offset, to_screen_coordinates
 from src.gcode.parser import GCodeParser
 
 
@@ -166,3 +168,140 @@ def test_format_bounds_info_contains_dimensions():
     assert "50.00" in info
     assert "30.00" in info
     assert "8.00" in info  # depth = 5 - (-3) = 8
+
+
+# ---------------------------------------------------------------------------
+# _interpolate_arc
+# ---------------------------------------------------------------------------
+
+def test_arc_quarter_circle_ccw():
+    """CCW quarter-circle from (10,0) to (0,10) with center at origin."""
+    pts = _interpolate_arc(10.0, 0.0, 0.0, 10.0, i=-10.0, j=0.0, cw=False, n_points=32)
+    assert len(pts) == 33  # n_points + 1
+    # First point must equal start.
+    assert math.isclose(pts[0][0], 10.0, abs_tol=1e-6)
+    assert math.isclose(pts[0][1], 0.0, abs_tol=1e-6)
+    # Last point must equal end.
+    assert math.isclose(pts[-1][0], 0.0, abs_tol=1e-6)
+    assert math.isclose(pts[-1][1], 10.0, abs_tol=1e-6)
+    # All points must lie on the circle of radius 10.
+    for x, y in pts:
+        assert math.isclose(math.hypot(x, y), 10.0, abs_tol=1e-6)
+
+
+def test_arc_quarter_circle_cw():
+    """CW quarter-circle from (10,0) to (0,-10) with center at origin."""
+    pts = _interpolate_arc(10.0, 0.0, 0.0, -10.0, i=-10.0, j=0.0, cw=True, n_points=32)
+    assert math.isclose(pts[0][0], 10.0, abs_tol=1e-6)
+    assert math.isclose(pts[0][1], 0.0, abs_tol=1e-6)
+    assert math.isclose(pts[-1][0], 0.0, abs_tol=1e-6)
+    assert math.isclose(pts[-1][1], -10.0, abs_tol=1e-6)
+    for x, y in pts:
+        assert math.isclose(math.hypot(x, y), 10.0, abs_tol=1e-6)
+
+
+def test_arc_full_circle():
+    """Coincident start/end produces a full circle (arc_points wraps 360°)."""
+    pts = _interpolate_arc(10.0, 0.0, 10.0, 0.0, i=-10.0, j=0.0, cw=False, n_points=64)
+    # First and last points coincide (full loop).
+    assert math.isclose(pts[0][0], pts[-1][0], abs_tol=1e-4)
+    assert math.isclose(pts[0][1], pts[-1][1], abs_tol=1e-4)
+    # All 65 points stay on the circle.
+    for x, y in pts:
+        assert math.isclose(math.hypot(x, y), 10.0, abs_tol=1e-4)
+
+
+def test_arc_degenerate_zero_radius():
+    """Zero-radius arc (I=J=0) must fall back to a straight line."""
+    pts = _interpolate_arc(0.0, 0.0, 5.0, 0.0, i=0.0, j=0.0, cw=False)
+    assert pts == [(0.0, 0.0), (5.0, 0.0)]
+
+
+# ---------------------------------------------------------------------------
+# build_toolpath — G91 incremental mode
+# ---------------------------------------------------------------------------
+
+def test_g91_incremental_single_move():
+    """G91 X10 Y0 from origin should land at (10, 0)."""
+    program = _parse("G91\nG1 X10 Y0 F500\n")
+    tp = build_toolpath(program)
+    assert len(tp.segments) == 1
+    seg = tp.segments[0]
+    assert math.isclose(seg.end_x, 10.0, abs_tol=1e-9)
+    assert math.isclose(seg.end_y, 0.0, abs_tol=1e-9)
+
+
+def test_g91_accumulates_position():
+    """Two G91 moves of X5 each must land at X10, not X5."""
+    program = _parse("G91\nG1 X5 F500\nG1 X5 F500\n")
+    tp = build_toolpath(program)
+    assert len(tp.segments) == 2
+    assert math.isclose(tp.segments[0].end_x, 5.0, abs_tol=1e-9)
+    assert math.isclose(tp.segments[1].end_x, 10.0, abs_tol=1e-9)
+
+
+def test_g91_switch_back_to_g90():
+    """G91 followed by G90 should resume absolute interpretation."""
+    program = _parse("G0 X10 Y0\nG91\nG1 X5 F500\nG90\nG1 X0 Y0 F500\n")
+    tp = build_toolpath(program)
+    # After incremental X5 from X10 → X15.
+    assert math.isclose(tp.segments[1].end_x, 15.0, abs_tol=1e-9)
+    # Absolute G1 X0 Y0 → back to origin.
+    assert math.isclose(tp.segments[2].end_x, 0.0, abs_tol=1e-9)
+    assert math.isclose(tp.segments[2].end_y, 0.0, abs_tol=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# build_toolpath — G2/G3 arc segments store arc_points
+# ---------------------------------------------------------------------------
+
+def test_g2_arc_has_arc_points():
+    """G2 arc segment must have arc_points populated."""
+    program = _parse("G0 X10 Y0\nG2 X0 Y10 I-10 J0 F500\n")
+    tp = build_toolpath(program)
+    arc_seg = tp.segments[-1]
+    assert arc_seg.type == PathType.ARC_CW
+    assert arc_seg.arc_points is not None
+    assert len(arc_seg.arc_points) > 2
+
+
+def test_g3_arc_has_arc_points():
+    """G3 arc segment must have arc_points populated."""
+    program = _parse("G0 X10 Y0\nG3 X0 Y10 I-10 J0 F500\n")
+    tp = build_toolpath(program)
+    arc_seg = tp.segments[-1]
+    assert arc_seg.type == PathType.ARC_CCW
+    assert arc_seg.arc_points is not None
+
+
+def test_linear_segment_has_no_arc_points():
+    """G1 segment must not have arc_points."""
+    program = _parse("G1 X10 Y0 F500\n")
+    tp = build_toolpath(program)
+    assert tp.segments[0].arc_points is None
+
+
+# ---------------------------------------------------------------------------
+# transforms
+# ---------------------------------------------------------------------------
+
+def test_apply_work_offset_subtracts():
+    result = apply_work_offset(10.0, 20.0, 5.0, 2.0, 3.0, 1.0)
+    assert result == (8.0, 17.0, 4.0)
+
+
+def test_apply_work_offset_zero_offset_is_identity():
+    result = apply_work_offset(5.0, 6.0, 7.0, 0.0, 0.0, 0.0)
+    assert result == (5.0, 6.0, 7.0)
+
+
+def test_to_screen_coordinates_scale_and_offset():
+    x, y = to_screen_coordinates(10.0, 5.0, scale=2.0, offset_x=100.0, offset_y=50.0)
+    assert math.isclose(x, 120.0)
+    assert math.isclose(y, 60.0)
+
+
+def test_to_screen_coordinates_identity():
+    x, y = to_screen_coordinates(3.0, 4.0, scale=1.0, offset_x=0.0, offset_y=0.0)
+    assert math.isclose(x, 3.0)
+    assert math.isclose(y, 4.0)

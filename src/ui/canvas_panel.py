@@ -1,6 +1,8 @@
 """Visualization canvas panel."""
 
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+import matplotlib.cm as _cm
+import matplotlib.colors as _mcolors
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 from PyQt6.QtCore import pyqtSignal, Qt
@@ -14,23 +16,21 @@ _SEVERITY_ICON: dict[WarningSeverity, str] = {
     WarningSeverity.INFO: "ℹ",
 }
 
-# Visual style per motion type.
-_SEGMENT_COLOR: dict[PathType, str] = {
-    PathType.RAPID: "#AAAAAA",
-    PathType.CUT: "#3399FF",
-    PathType.ARC_CW: "#33CCAA",
-    PathType.ARC_CCW: "#33CCAA",
-}
-_SEGMENT_LINESTYLE: dict[PathType, str] = {
-    PathType.RAPID: "--",
-    PathType.CUT: "-",
-    PathType.ARC_CW: "-",
-    PathType.ARC_CCW: "-",
-}
+# Visual style for rapid (G0) moves — always gray dashed regardless of Z.
+_RAPID_COLOR = "#AAAAAA"
+_RAPID_LINESTYLE = "--"
+# Style for cut/arc segments when Z-depth coloring is disabled.
+_CUT_COLOR = "#3399FF"
+_ARC_COLOR = "#33CCAA"
 _HIGHLIGHT_COLOR = "#FF9900"
+
+# Colormap used for Z-depth encoding (deep = dark; surface = light).
+_Z_CMAP = _cm.get_cmap("Blues_r")
 
 # Default view extent when no toolpath is loaded yet (mm).
 _DEFAULT_VIEW = (-10.0, 50.0)
+
+_ARC_TYPES = frozenset({PathType.ARC_CW, PathType.ARC_CCW})
 
 
 class CanvasPanel(QWidget):
@@ -42,16 +42,20 @@ class CanvasPanel(QWidget):
         super().__init__(parent)
         self._toolpath: ToolPath | None = None
         self._highlighted_line: int | None = None
+        self._colorbar = None
         self._setup_ui()
 
     def _setup_ui(self) -> None:
-        """Build the canvas layout with a matplotlib FigureCanvas."""
+        """Build the canvas layout with a matplotlib FigureCanvas and navigation toolbar."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
         self._figure = Figure(tight_layout=True)
         self._axes = self._figure.add_subplot(111)
         self._mpl_canvas = FigureCanvasQTAgg(self._figure)
+
+        self._nav_toolbar = NavigationToolbar2QT(self._mpl_canvas, self)
+        layout.addWidget(self._nav_toolbar)
         layout.addWidget(self._mpl_canvas, stretch=1)
 
         self._warning_label = QLabel("")
@@ -123,6 +127,11 @@ class CanvasPanel(QWidget):
 
     def _redraw(self) -> None:
         """Clear the axes and repaint all content."""
+        # Remove old colorbar before clearing axes so its axes are gone too.
+        if self._colorbar is not None:
+            self._colorbar.remove()
+            self._colorbar = None
+
         self._axes.clear()
         self._draw_coordinate_system()
 
@@ -132,38 +141,79 @@ class CanvasPanel(QWidget):
             self._mpl_canvas.draw()
             return
 
+        # Build Z-depth normalizer from all non-rapid segments.
+        cut_segs = [s for s in self._toolpath.segments if s.type != PathType.RAPID]
+        z_values = [s.start_z for s in cut_segs] + [s.end_z for s in cut_segs]
+        use_z_color = bool(z_values) and (max(z_values) - min(z_values)) > 0.01
+
+        if use_z_color:
+            norm = _mcolors.Normalize(vmin=min(z_values), vmax=max(z_values))
+        else:
+            norm = None
+
         for seg in self._toolpath.segments:
             highlighted = seg.line_number == self._highlighted_line
-            color = _HIGHLIGHT_COLOR if highlighted else _SEGMENT_COLOR[seg.type]
             lw = 2.0 if highlighted else 1.0
+            zorder = 3 if highlighted else 2
+
+            # Choose colour.
+            if highlighted:
+                color = _HIGHLIGHT_COLOR
+            elif seg.type == PathType.RAPID:
+                color = _RAPID_COLOR
+            elif use_z_color and norm is not None:
+                color = _Z_CMAP(norm(seg.start_z))
+            elif seg.type in _ARC_TYPES:
+                color = _ARC_COLOR
+            else:
+                color = _CUT_COLOR
+
+            # Choose line style.
+            linestyle = _RAPID_LINESTYLE if seg.type == PathType.RAPID else "-"
+
+            # Build coordinate arrays: use arc waypoints when available.
+            if seg.arc_points:
+                xs = [p[0] for p in seg.arc_points]
+                ys = [p[1] for p in seg.arc_points]
+            else:
+                xs = [seg.start_x, seg.end_x]
+                ys = [seg.start_y, seg.end_y]
+
             self._axes.plot(
-                [seg.start_x, seg.end_x],
-                [seg.start_y, seg.end_y],
+                xs, ys,
                 color=color,
                 linewidth=lw,
-                linestyle=_SEGMENT_LINESTYLE[seg.type],
+                linestyle=linestyle,
                 solid_capstyle="round",
-                zorder=3 if highlighted else 2,
+                zorder=zorder,
+            )
+
+        # Add a colorbar when Z-depth encoding is active.
+        if use_z_color and norm is not None:
+            sm = _cm.ScalarMappable(cmap=_Z_CMAP, norm=norm)
+            sm.set_array([])
+            self._colorbar = self._figure.colorbar(
+                sm, ax=self._axes, label="Z [mm]", fraction=0.04, pad=0.04
             )
 
         self._fit_view()
         self._mpl_canvas.draw()
 
     def _fit_view(self) -> None:
-        """Auto-scale the view to include all segments and the origin."""
+        """Auto-scale the view to include all segments (including arc waypoints) and the origin."""
         if not self._toolpath or not self._toolpath.segments:
             return
 
-        all_x = (
-            [s.start_x for s in self._toolpath.segments]
-            + [s.end_x for s in self._toolpath.segments]
-            + [0.0]
-        )
-        all_y = (
-            [s.start_y for s in self._toolpath.segments]
-            + [s.end_y for s in self._toolpath.segments]
-            + [0.0]
-        )
+        all_x: list[float] = [0.0]
+        all_y: list[float] = [0.0]
+
+        for s in self._toolpath.segments:
+            if s.arc_points:
+                all_x.extend(p[0] for p in s.arc_points)
+                all_y.extend(p[1] for p in s.arc_points)
+            else:
+                all_x.extend([s.start_x, s.end_x])
+                all_y.extend([s.start_y, s.end_y])
 
         span_x = max(max(all_x) - min(all_x), 1.0)
         span_y = max(max(all_y) - min(all_y), 1.0)

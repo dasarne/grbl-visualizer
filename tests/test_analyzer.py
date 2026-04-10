@@ -260,3 +260,138 @@ def test_comment_extraction_no_comment():
     from src.gcode.parser import GCodeParser
     program = GCodeParser("1.1H").parse_text("G1 X10 F500\n")
     assert program.lines[0].comment is None
+
+
+# ---------------------------------------------------------------------------
+# Origin detection (_check_missing_origin)
+# ---------------------------------------------------------------------------
+
+def test_origin_detected_via_g92():
+    """G92 anywhere in the program suppresses the missing-origin hint."""
+    gcode = "G92 X0 Y0 Z0\nG0 X10 Y10\nG1 X20 F500\n"
+    warnings = _analyze(gcode)
+    missing_hints = [w for w in warnings if "No explicit work-coordinate origin" in w.message]
+    assert missing_hints == []
+
+
+def test_origin_detected_via_move_to_zero():
+    """A G0 X0 Y0 move is accepted as an explicit origin."""
+    gcode = "G0 X0 Y0\nG1 X10 F500\n"
+    warnings = _analyze(gcode)
+    missing_hints = [w for w in warnings if "No explicit work-coordinate origin" in w.message]
+    assert missing_hints == []
+
+
+def test_missing_origin_hint_emitted():
+    """A program with motion but no G92/X0Y0 should emit an INFO hint."""
+    gcode = "G0 X5 Y5\nG1 X50 F500\n"
+    warnings = _analyze(gcode)
+    missing_hints = [w for w in warnings if "No explicit work-coordinate origin" in w.message]
+    assert len(missing_hints) == 1
+    assert missing_hints[0].severity == WarningSeverity.INFO
+
+
+def test_no_motion_no_origin_hint():
+    """A program with no motion commands must not produce an origin hint."""
+    gcode = "G21\nG90\nM30\n"
+    warnings = _analyze(gcode)
+    missing_hints = [w for w in warnings if "No explicit work-coordinate origin" in w.message]
+    assert missing_hints == []
+
+
+# ---------------------------------------------------------------------------
+# Optimizer
+# ---------------------------------------------------------------------------
+
+def _optimize(gcode: str):
+    from src.analyzer.optimizer import GCodeOptimizer
+    from src.gcode.parser import GCodeParser
+    program = GCodeParser("1.1H").parse_text(gcode)
+    return GCodeOptimizer().optimize(program)
+
+
+def test_optimizer_redundant_rapid_detected():
+    """Two consecutive G0 to the same position must flag a redundant move."""
+    gcode = "G0 X10 Y5 Z3\nG0 X10 Y5 Z3\n"
+    hints = _optimize(gcode)
+    assert len(hints) == 1
+    assert "Redundant" in hints[0].description
+    assert hints[0].line_numbers == [1, 2]
+
+
+def test_optimizer_no_redundant_rapids_for_different_positions():
+    """G0 moves to different positions must not be flagged."""
+    gcode = "G0 X10 Y0\nG0 X20 Y0\n"
+    hints = _optimize(gcode)
+    rapid_hints = [h for h in hints if "Redundant" in h.description]
+    assert rapid_hints == []
+
+
+def test_optimizer_repeated_tool_change_detected():
+    """M3, M5, M3 with fewer than 2 cuts must flag an unnecessary stop/start."""
+    gcode = "M3 S1000\nG1 X10 F500\nM5\nM3 S1000\nG1 X20 F500\n"
+    hints = _optimize(gcode)
+    tc_hints = [h for h in hints if "spindle" in h.description.lower()]
+    assert len(tc_hints) == 1
+    assert 3 in tc_hints[0].line_numbers  # M5 on line 3
+    assert 4 in tc_hints[0].line_numbers  # M3 on line 4
+
+
+def test_optimizer_no_hint_when_many_cuts_between_tool_changes():
+    """Multiple cuts between M5 and M3 must not trigger the hint."""
+    gcode = "M3 S1000\nM5\nG1 X10 F500\nG1 X20 F500\nM3 S1000\n"
+    hints = _optimize(gcode)
+    tc_hints = [h for h in hints if "spindle" in h.description.lower()]
+    assert tc_hints == []
+
+
+def test_optimizer_clean_program_no_hints(sample_gcode):
+    """The sample_gcode fixture should produce no optimization hints."""
+    from src.analyzer.optimizer import GCodeOptimizer
+    from src.gcode.parser import GCodeParser
+    program = GCodeParser("1.1H").parse_text(sample_gcode)
+    hints = GCodeOptimizer().optimize(program)
+    assert hints == []
+
+
+# ---------------------------------------------------------------------------
+# validate_program (parser)
+# ---------------------------------------------------------------------------
+
+def test_validate_program_flags_unknown_command():
+    """G81 is unknown to GRBL — validate_program must flag it."""
+    from src.gcode.parser import GCodeParser
+    parser = GCodeParser("1.1H")
+    program = parser.parse_text("G81 X10 Y10 Z-5 F200\n")
+    warnings = parser.validate_program(program)
+    assert len(warnings) == 1
+    assert "G81" in warnings[0]
+
+
+def test_validate_program_flags_unsupported_command_for_version():
+    """G38.2 is unsupported on 1.1H — validate_program must flag it."""
+    from src.gcode.parser import GCodeParser
+    parser = GCodeParser("1.1H")
+    program = parser.parse_text("G38.2 Z-5 F100\n")
+    warnings = parser.validate_program(program)
+    assert len(warnings) == 1
+    assert "G38.2" in warnings[0]
+    assert "1.1H" in warnings[0]
+
+
+def test_validate_program_clean_for_supported_commands():
+    """Supported commands must produce no warnings."""
+    from src.gcode.parser import GCodeParser
+    parser = GCodeParser("1.1j")
+    program = parser.parse_text("G0 X0 Y0\nG1 X10 F500\nG38.2 Z-5 F100\nM3 S1000\n")
+    warnings = parser.validate_program(program)
+    assert warnings == []
+
+
+def test_validate_program_includes_line_numbers():
+    """Warning strings must reference the correct line number."""
+    from src.gcode.parser import GCodeParser
+    parser = GCodeParser("1.1H")
+    program = parser.parse_text("G0 X0\nG81 X10 Z-5\n")
+    warnings = parser.validate_program(program)
+    assert any("2" in w for w in warnings)

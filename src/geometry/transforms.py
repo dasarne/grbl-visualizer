@@ -16,9 +16,11 @@ def apply_work_offset(
 ) -> tuple[float, float, float]:
     """Apply a work coordinate offset to machine coordinates.
 
-    TODO: Implement offset application.
+    Subtracts the given work-offset from each axis so that the returned
+    coordinates are expressed relative to the work origin rather than the
+    machine origin.
     """
-    return (x, y, z)
+    return (x - offset_x, y - offset_y, z - offset_z)
 
 
 def to_screen_coordinates(
@@ -26,6 +28,7 @@ def to_screen_coordinates(
 ) -> tuple[float, float]:
     """Convert G-Code world coordinates to screen pixel coordinates.
 
-    TODO: Implement scale and pan transform.
+    Applies a uniform ``scale`` factor and then shifts by ``(offset_x,
+    offset_y)`` so that the world origin maps to the desired screen position.
     """
-    return (x, y)
+    return (x * scale + offset_x, y * scale + offset_y)

@@ -4,6 +4,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QSplitter,
     QToolBar,
     QWidget,
@@ -31,6 +32,7 @@ class MainWindow(QMainWindow):
         self._comment_panel = CommentPanel()
         self._canvas_panel = CanvasPanel()
         self._current_version = DEFAULT_VERSION
+        self._loaded_content: str = ""
 
         self._setup_ui()
         self._setup_menu()
@@ -53,7 +55,7 @@ class MainWindow(QMainWindow):
 
         file_menu = menu_bar.addMenu("&File")
         file_menu.addAction("&Open…", self.open_file)
-        file_menu.addAction("&Save")
+        file_menu.addAction("&Save", self.save_file)
         file_menu.addSeparator()
         file_menu.addAction("E&xit", self.close)
 
@@ -98,8 +100,26 @@ class MainWindow(QMainWindow):
                 content = fh.read()
             self._load_content(content, label=path)
 
+    def save_file(self) -> None:
+        """Save the currently loaded G-Code to a file chosen by the user."""
+        if not self._loaded_content:
+            QMessageBox.information(self, "Save", "No G-Code loaded to save.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save G-Code File",
+            "",
+            "G-Code Files (*.gcode *.nc *.ngc *.tap);;All Files (*)",
+        )
+        if path:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self._loaded_content)
+            self.statusBar().showMessage(f"Saved: {path}")
+
     def _load_content(self, content: str, label: str = "") -> None:
         """Parse content, run analysis, and update all UI panels."""
+        self._loaded_content = content
         self._editor_panel.load_content(content)
 
         parser = GCodeParser(version_id=self._current_version)

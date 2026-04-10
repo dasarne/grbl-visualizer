@@ -1,10 +1,11 @@
 """G-Code editor panel."""
 
-from PyQt6.QtWidgets import QVBoxLayout, QPlainTextEdit, QWidget
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtWidgets import QVBoxLayout, QWidget
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QTextCharFormat, QColor, QTextCursor
 
 from ..analyzer.analyzer import AnalysisWarning, WarningSeverity
+from .widgets import GCodeEditor
 
 _SEVERITY_COLORS: dict[WarningSeverity, str] = {
     WarningSeverity.ERROR: "#FFCCCC",
@@ -27,9 +28,9 @@ class EditorPanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self._text_edit = QPlainTextEdit()
+        self._text_edit = GCodeEditor()
         self._text_edit.setReadOnly(True)
-        self._text_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self._text_edit.setLineWrapMode(GCodeEditor.LineWrapMode.NoWrap)
         self._text_edit.cursorPositionChanged.connect(self._on_cursor_moved)
         layout.addWidget(self._text_edit)
 
