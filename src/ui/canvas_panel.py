@@ -65,6 +65,15 @@ class CanvasPanel(QWidget):
         self._warning_label.setStyleSheet("color: #CC6600; font-size: 11px; padding: 4px;")
         layout.addWidget(self._warning_label, stretch=0)
 
+        self._dims_label = QLabel("")
+        self._dims_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._dims_label.setStyleSheet(
+            "background: #1E1E2E; color: #CDD6F4; font-size: 12px; "
+            "font-weight: bold; padding: 6px 8px; border-radius: 4px;"
+        )
+        self._dims_label.hide()
+        layout.addWidget(self._dims_label, stretch=0)
+
         self._draw_empty_canvas()
 
     # ------------------------------------------------------------------
@@ -198,10 +207,16 @@ class CanvasPanel(QWidget):
             )
 
         self._fit_view()
+        self._update_dims_label()
         self._mpl_canvas.draw()
 
     def _fit_view(self) -> None:
-        """Auto-scale the 3-D view to include all segments (including arc waypoints) and origin."""
+        """Auto-scale the 3-D view.
+
+        The view is fitted to *all* segments (rapids included) so that the
+        rapid-travel lines stay visible, but the starting frame always
+        includes the origin.
+        """
         if not self._toolpath or not self._toolpath.segments:
             return
 
@@ -229,3 +244,40 @@ class CanvasPanel(QWidget):
         self._axes.set_xlim(min(all_x) - mx, max(all_x) + mx)
         self._axes.set_ylim(min(all_y) - my, max(all_y) + my)
         self._axes.set_zlim(min(all_z) - mz, max(all_z) + mz)  # type: ignore[attr-defined]
+
+    def _update_dims_label(self) -> None:
+        """Compute workpiece dimensions from cut/arc segments and show them in the label.
+
+        G0 rapid-positioning moves are excluded because they travel outside the
+        workpiece and must not influence the reported dimensions.
+        """
+        if not self._toolpath or not self._toolpath.segments:
+            self._dims_label.hide()
+            return
+
+        cut_segs = [s for s in self._toolpath.segments if s.type != PathType.RAPID]
+        if not cut_segs:
+            self._dims_label.hide()
+            return
+
+        xs: list[float] = []
+        ys: list[float] = []
+        zs: list[float] = []
+        for s in cut_segs:
+            if s.arc_points:
+                xs.extend(p[0] for p in s.arc_points)
+                ys.extend(p[1] for p in s.arc_points)
+                zs.extend(p[2] for p in s.arc_points)
+            else:
+                xs.extend([s.start_x, s.end_x])
+                ys.extend([s.start_y, s.end_y])
+                zs.extend([s.start_z, s.end_z])
+
+        width = max(xs) - min(xs)
+        height = max(ys) - min(ys)
+        depth = max(zs) - min(zs)
+
+        self._dims_label.setText(
+            f"Werkstück  ·  X: {width:.2f} mm   Y: {height:.2f} mm   Z: {depth:.2f} mm"
+        )
+        self._dims_label.show()

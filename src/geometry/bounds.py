@@ -5,11 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, auto
 
-# Commands that explicitly move the tool and may carry X/Y/Z coordinates.
-_MOTION_COMMANDS = frozenset({
-    "G0", "G1", "G2", "G3",
-    "G38.2", "G38.3", "G38.4", "G38.5",
-})
+# Commands that perform actual work inside the material and carry X/Y/Z coordinates.
+# G0 (rapid positioning) moves the tool outside the workpiece and must not
+# contribute to the workpiece bounding box.  G38.x probing moves are likewise
+# excluded because they do not cut material.
+_WORK_COMMANDS = frozenset({"G1", "G2", "G3"})
 
 
 @dataclass
@@ -57,19 +57,26 @@ class ZOrigin(Enum):
     AMBIGUOUS = auto()          # All Z ≤ 0 or no Z coordinates found
 
 
-def calculate_bounds(program) -> BoundingBox | None:
-    """Calculate the axis-aligned bounding box of all motion coordinates.
+# All commands that produce tool motion (used for Z-origin inference only).
+_ALL_MOTION_COMMANDS = frozenset({
+    "G0", "G1", "G2", "G3",
+    "G38.2", "G38.3", "G38.4", "G38.5",
+})
 
-    Scans every G0/G1/G2/G3/G38.x line and records the explicitly stated
-    X, Y, and Z values.  Returns None when the program contains no motion
-    coordinates at all.
+
+def calculate_bounds(program) -> BoundingBox | None:
+    """Calculate the axis-aligned bounding box of all *work* motion coordinates.
+
+    Only G1/G2/G3 lines are considered.  G0 rapid-positioning moves travel
+    outside the workpiece and must not influence the reported dimensions.
+    Returns None when the program contains no work-motion coordinates at all.
     """
     xs: list[float] = []
     ys: list[float] = []
     zs: list[float] = []
 
     for line in program.lines:
-        if line.command not in _MOTION_COMMANDS:
+        if line.command not in _WORK_COMMANDS:
             continue
         if 'X' in line.parameters:
             xs.append(line.parameters['X'])
@@ -90,6 +97,21 @@ def calculate_bounds(program) -> BoundingBox | None:
     max_z = max(zs) if zs else 0.0
 
     return BoundingBox(min_x, min_y, min_z, max_x, max_y, max_z)
+
+
+def calculate_z_travel_range(program) -> tuple[float, float] | None:
+    """Return the (min_z, max_z) of all motion commands including G0 rapids.
+
+    This is used specifically for Z-origin inference: the safe-height (G0 Zn)
+    must be visible to correctly detect a workpiece-surface Z origin even
+    though G0 moves are excluded from the workpiece bounding box.
+    Returns None when no Z value is found in any motion command.
+    """
+    zs: list[float] = []
+    for line in program.lines:
+        if line.command in _ALL_MOTION_COMMANDS and 'Z' in line.parameters:
+            zs.append(line.parameters['Z'])
+    return (min(zs), max(zs)) if zs else None
 
 
 def infer_xy_origin(bounds: BoundingBox) -> XYOrigin:
@@ -120,26 +142,42 @@ def infer_xy_origin(bounds: BoundingBox) -> XYOrigin:
     return XYOrigin.CENTER
 
 
-def infer_z_origin(bounds: BoundingBox) -> ZOrigin:
+def infer_z_origin(
+    bounds: BoundingBox,
+    z_travel_range: tuple[float, float] | None = None,
+) -> ZOrigin:
     """Infer whether the Z origin is on the workpiece surface or spoilboard.
 
-    * workpiece-surface: mixed signs (Z > 0 = safe height above material,
-                         Z < 0 = cut depth into material)
-    * spoilboard:        all Z ≥ 0 — Z=0 is the sacrificial plate, the
-                         workpiece sits on top with positive Z values
-    * ambiguous:         all Z ≤ 0 or no Z coordinates present
+    ``bounds`` contains only the work-move (G1/G2/G3) extents.  Because G0
+    rapid moves travel to the safe height *above* the workpiece, they are not
+    in ``bounds`` but are required to detect the "workpiece surface" origin
+    pattern (Z > 0 safe height + Z < 0 cut depth).
+
+    Pass the result of :func:`calculate_z_travel_range` as ``z_travel_range``
+    to include G0 Z values in the Z-origin detection.  When omitted, only
+    ``bounds`` is consulted.
+
+    * workpiece-surface: max_z > 0 (safe height) and min_z < 0 (cut depth)
+    * spoilboard:        all Z ≥ 0 — Z=0 is the sacrificial plate
+    * ambiguous:         all Z ≤ 0 or no Z coordinates found
     """
-    if bounds.min_z >= 0:
+    z_min = bounds.min_z
+    z_max = bounds.max_z
+    if z_travel_range is not None:
+        z_min = min(z_min, z_travel_range[0])
+        z_max = max(z_max, z_travel_range[1])
+
+    if z_min >= 0:
         return ZOrigin.SPOILBOARD
-    if bounds.max_z > 0:
+    if z_max > 0:
         return ZOrigin.WORKPIECE_SURFACE
     return ZOrigin.AMBIGUOUS
 
 
 def format_bounds_info(bounds: BoundingBox) -> str:
-    """Return a human-readable description of the workpiece size."""
+    """Return a human-readable description of the workpiece dimensions (cut moves only)."""
     return (
-        f"Width: {bounds.width:.2f} mm  "
-        f"Height: {bounds.height:.2f} mm  "
-        f"Depth: {bounds.depth:.2f} mm"
+        f"X: {bounds.width:.2f} mm  "
+        f"Y: {bounds.height:.2f} mm  "
+        f"Z: {bounds.depth:.2f} mm"
     )

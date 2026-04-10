@@ -7,6 +7,7 @@ from ..gcode.commands import ALL_COMMANDS
 from ..gcode.grbl_versions import get_version
 from ..geometry.bounds import (
     calculate_bounds,
+    calculate_z_travel_range,
     infer_xy_origin,
     infer_z_origin,
     XYOrigin,
@@ -185,6 +186,8 @@ class GCodeAnalyzer:
         if bounds is None:
             return []
 
+        z_travel = calculate_z_travel_range(program)
+
         hints: list[AnalysisWarning] = []
 
         # --- Workpiece X/Y dimensions ---
@@ -218,7 +221,7 @@ class GCodeAnalyzer:
         ))
 
         # --- Z origin placement ---
-        z_origin = infer_z_origin(bounds)
+        z_origin = infer_z_origin(bounds, z_travel)
         if z_origin == ZOrigin.SPOILBOARD:
             hints.append(AnalysisWarning(
                 severity=WarningSeverity.INFO,

@@ -7,6 +7,7 @@ from src.geometry.bounds import (
     XYOrigin,
     ZOrigin,
     calculate_bounds,
+    calculate_z_travel_range,
     infer_xy_origin,
     infer_z_origin,
     format_bounds_info,
@@ -65,18 +66,25 @@ def test_calculate_bounds_no_motion_returns_none():
     assert calculate_bounds(program) is None
 
 
-def test_calculate_bounds_single_move():
-    bb = calculate_bounds(_parse("G0 X10 Y5 Z3"))
+def test_calculate_bounds_g0_only_returns_none():
+    """G0-only program must return None — rapids are outside the workpiece."""
+    assert calculate_bounds(_parse("G0 X10 Y5 Z3")) is None
+
+
+def test_calculate_bounds_single_cut_move():
+    """A single G1 move must produce the correct bounding box."""
+    bb = calculate_bounds(_parse("G1 X10 Y5 Z-3 F300"))
     assert bb is not None
     assert bb.max_x == pytest.approx(10.0)
     assert bb.max_y == pytest.approx(5.0)
-    assert bb.max_z == pytest.approx(3.0)
+    assert bb.max_z == pytest.approx(-3.0)
     assert bb.min_x == pytest.approx(10.0)
     assert bb.width == pytest.approx(0.0)
 
 
 def test_calculate_bounds_multiple_moves():
-    gcode = "G0 X0 Y0 Z5\nG1 X50 Y30 Z-2 F300\nG0 X0 Y0 Z5\n"
+    """G0 rapid moves must not contribute to the bounding box."""
+    gcode = "G0 X0 Y0 Z5\nG1 X50 Y30 Z-2 F300\nG1 X0 Y0 Z0 F300\nG0 Z5\n"
     bb = calculate_bounds(_parse(gcode))
     assert bb is not None
     assert bb.min_x == pytest.approx(0.0)
@@ -84,10 +92,10 @@ def test_calculate_bounds_multiple_moves():
     assert bb.min_y == pytest.approx(0.0)
     assert bb.max_y == pytest.approx(30.0)
     assert bb.min_z == pytest.approx(-2.0)
-    assert bb.max_z == pytest.approx(5.0)
+    assert bb.max_z == pytest.approx(0.0)
     assert bb.width == pytest.approx(50.0)
     assert bb.height == pytest.approx(30.0)
-    assert bb.depth == pytest.approx(7.0)
+    assert bb.depth == pytest.approx(2.0)
 
 
 def test_calculate_bounds_sample_gcode(sample_gcode):
@@ -98,13 +106,24 @@ def test_calculate_bounds_sample_gcode(sample_gcode):
 
 
 def test_calculate_bounds_ignores_non_motion_commands():
-    """M3, G21, G90 etc. must not contribute coordinates."""
-    gcode = "G21\nM3 S1000\nG0 X5 Y5 Z2\n"
+    """M3, G21, G90 etc. must not contribute coordinates; G0 is also excluded."""
+    gcode = "G21\nM3 S1000\nG1 X5 Y5 Z-1 F300\n"
     bb = calculate_bounds(_parse(gcode))
     assert bb is not None
     assert bb.max_x == pytest.approx(5.0)
     # S parameter from M3 must not pollute coordinates
     assert bb.min_y == pytest.approx(5.0)
+
+
+def test_calculate_bounds_excludes_rapids():
+    """G0 coordinates must never influence the bounding box."""
+    # G0 reaches X100 Y100, but only G1 X10 Y10 should count.
+    gcode = "G0 X100 Y100 Z10\nG1 X10 Y10 Z-1 F300\nG0 X100 Y100 Z10\n"
+    bb = calculate_bounds(_parse(gcode))
+    assert bb is not None
+    assert bb.max_x == pytest.approx(10.0)
+    assert bb.max_y == pytest.approx(10.0)
+    assert bb.max_z == pytest.approx(-1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +163,14 @@ def test_z_origin_workpiece_surface():
     """Z > 0 safe height + Z < 0 cut depth → workpiece surface."""
     bb = BoundingBox(0.0, 0.0, -3.0, 50.0, 30.0, 5.0)
     assert infer_z_origin(bb) == ZOrigin.WORKPIECE_SURFACE
+
+
+def test_z_origin_workpiece_surface_via_z_travel_range():
+    """With G0-only Z >0 in z_travel_range and G1-only Z < 0 in bounds → workpiece surface."""
+    # bounds contains only cut (G1) coords: Z=-3 only (all negative)
+    bb = BoundingBox(0.0, 0.0, -3.0, 50.0, 30.0, -3.0)
+    # z_travel_range includes G0 safe-height Z=5
+    assert infer_z_origin(bb, z_travel_range=(-3.0, 5.0)) == ZOrigin.WORKPIECE_SURFACE
 
 
 def test_z_origin_spoilboard():
