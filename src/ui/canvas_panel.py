@@ -1,70 +1,68 @@
-"""Visualization canvas panel.
+"""Visualization canvas panel – native QPainter renderer.
 
-Uses a 2D isometric projection to render the toolpath.  This avoids the
-slow and shrink-prone matplotlib 3-D backend and closely matches the visual
-style of ncviewer.com: light background, gray grid floor, blue cut moves,
-orange rapid moves, and a semi-transparent workpiece surface.
+Replaces the slow matplotlib backend with a lightweight QWidget that renders
+the toolpath directly via Qt's native QPainter.  Benefits over matplotlib:
 
-Projection (cabinet / axonometric):
-    screen_x = world_x + world_y * cos(30°)
-    screen_y = world_z + world_y * sin(30°)
+* **Zero lag on highlight**: ``highlight_segment()`` sets one attribute and
+  calls ``update()``.  The next ``paintEvent`` dispatches the highlight colour
+  through the already-built line list in microseconds — no re-projection.
+* **No size change on click**: the drawing area is the widget's own pixel
+  rectangle.  It cannot shrink.
+* **Interactive zoom / pan**: mouse wheel zooms around the cursor; left-button
+  drag pans.  A "Fit" button resets the view.
+* **Fast**: ``QPainter.drawLines()`` is a single native C++ call that renders
+  thousands of line segments without Python overhead at render time.
 
-X goes to the right, Y recedes to the upper-right at 30°, Z goes straight up.
+Isometric projection (cabinet / axonometric):
+    screen_x =  world_x + world_y × cos(30°)
+    screen_y = −(world_z  + world_y × sin(30°))   # Y flipped for Qt coords
+
+X goes to the right, Y recedes to the upper-right at 30°, Z goes up.
 """
 
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 
-import numpy as np
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
-from matplotlib.collections import LineCollection
-from matplotlib.figure import Figure
-from matplotlib.patches import Polygon as MplPolygon
-from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
-from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtCore import Qt, QLineF, QPointF, QRectF, pyqtSignal
+from PyQt6.QtGui import (
+    QBrush, QColor, QMouseEvent, QPaintEvent, QPainter, QPen,
+    QPolygonF, QResizeEvent, QWheelEvent,
+)
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..analyzer.analyzer import AnalysisWarning, WarningSeverity
 from ..geometry.path import PathType, ToolPath
 
 # ---------------------------------------------------------------------------
-# Isometric projection constants
+# Isometric projection
 # ---------------------------------------------------------------------------
 
 _C30 = math.cos(math.radians(30))   # ≈ 0.866
 _S30 = math.sin(math.radians(30))   # ≈ 0.500
 
 
-def _proj(x: float, y: float, z: float) -> tuple[float, float]:
-    """Map world (x, y, z) → 2-D screen (sx, sy) via axonometric projection."""
-    return x + y * _C30, z + y * _S30
-
-
-def _proj_arrays(
-    xs: list[float], ys: list[float], zs: list[float]
-) -> tuple[np.ndarray, np.ndarray]:
-    """Vectorised projection for arrays of world coordinates."""
-    xa = np.asarray(xs, dtype=float)
-    ya = np.asarray(ys, dtype=float)
-    za = np.asarray(zs, dtype=float)
-    return xa + ya * _C30, za + ya * _S30
+def _proj(x: float, y: float, z: float) -> QPointF:
+    """Map world (x, y, z) → Qt screen point via axonometric projection."""
+    return QPointF(x + y * _C30, -(z + y * _S30))
 
 
 # ---------------------------------------------------------------------------
-# Visual style constants
+# Visual constants
 # ---------------------------------------------------------------------------
 
-_BG_COLOR = "#F8F8F8"           # canvas background (nearly white)
-_GRID_COLOR = "#CCCCCC"         # floor grid lines
-_WORKPIECE_FACE = "#EBEBEB"     # workpiece surface fill
-_WORKPIECE_EDGE = "#999999"     # workpiece edge colour
-_RAPID_COLOR = "#FF9900"        # orange — rapid positioning (G0)
-_CUT_COLOR = "#2244BB"          # blue — linear cut (G1)
-_ARC_COLOR = "#2266DD"          # slightly lighter blue — arcs (G2/G3)
-_HIGHLIGHT_COLOR = "#EE3300"    # red — currently selected segment
-_AX_X = "#CC3333"               # X-axis arrow colour
-_AX_Y = "#33AA33"               # Y-axis arrow colour
-_AX_Z = "#3366CC"               # Z-axis arrow colour
+_BG_COLOR = QColor("#F5F5F5")
+_GRID_COLOR = QColor("#CCCCCC")
+_WP_FILL = QColor(220, 220, 220, 150)
+_WP_EDGE_COLOR = QColor("#AAAAAA")
+_RAPID_COLOR = QColor("#FF9900")
+_CUT_COLOR = QColor("#2244BB")
+_HIGHLIGHT_COLOR = QColor("#EE3300")
+_AX_X_COLOR = QColor("#CC3333")
+_AX_Y_COLOR = QColor("#33AA33")
+_AX_Z_COLOR = QColor("#3366CC")
+_TEXT_HINT_COLOR = QColor("#AAAAAA")
 
 _SEVERITY_ICON: dict[WarningSeverity, str] = {
     WarningSeverity.ERROR: "✕",
@@ -72,66 +70,389 @@ _SEVERITY_ICON: dict[WarningSeverity, str] = {
     WarningSeverity.INFO: "ℹ",
 }
 
-_ARC_TYPES = frozenset({PathType.ARC_CW, PathType.ARC_CCW})
-_DEFAULT_SX = (-10.0, 50.0)
-_DEFAULT_SY = (-5.0, 30.0)
+
+def _cosmetic_pen(color: QColor, width: float,
+                  style: Qt.PenStyle = Qt.PenStyle.SolidLine) -> QPen:
+    """Return a cosmetic pen (constant pixel width regardless of zoom)."""
+    pen = QPen(color, width, style)
+    pen.setCosmetic(True)
+    return pen
+
+
+_PEN_GRID = _cosmetic_pen(_GRID_COLOR, 0.7)
+_PEN_WP_EDGE = _cosmetic_pen(_WP_EDGE_COLOR, 1.0)
+_PEN_RAPID = _cosmetic_pen(_RAPID_COLOR, 1.2, Qt.PenStyle.DashLine)
+_PEN_CUT = _cosmetic_pen(_CUT_COLOR, 1.2)
+_PEN_HIGHLIGHT = _cosmetic_pen(_HIGHLIGHT_COLOR, 2.5)
+_PEN_AX_X = _cosmetic_pen(_AX_X_COLOR, 1.5)
+_PEN_AX_Y = _cosmetic_pen(_AX_Y_COLOR, 1.5)
+_PEN_AX_Z = _cosmetic_pen(_AX_Z_COLOR, 1.5)
 
 
 # ---------------------------------------------------------------------------
-# CanvasPanel
+# Per-segment geometry cache (projected once, rendered many times)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _SegGeom:
+    line_number: int | None
+    is_rapid: bool
+    points: list[QPointF]   # projected 2-D screen points (2 for linear, N for arc)
+
+
+# ---------------------------------------------------------------------------
+# Grid helper
+# ---------------------------------------------------------------------------
+
+def _make_grid_lines(
+    xmin: float, xmax: float,
+    ymin: float, ymax: float,
+    z_floor: float,
+) -> list[QLineF]:
+    """Build grid QLineF list for the XY floor plane at *z_floor*."""
+    pad_x = max((xmax - xmin) * 0.25, 5.0)
+    pad_y = max((ymax - ymin) * 0.25, 5.0)
+    gxmin, gxmax = xmin - pad_x, xmax + pad_x
+    gymin, gymax = ymin - pad_y, ymax + pad_y
+
+    span = max(gxmax - gxmin, gymax - gymin, 1.0)
+    raw_step = span / 10.0
+    magnitude = 10 ** math.floor(math.log10(raw_step))
+    step = next(
+        (n * magnitude for n in (1, 2, 5, 10) if raw_step <= n * magnitude),
+        10 * magnitude,
+    )
+
+    lines: list[QLineF] = []
+    y = math.floor(gymin / step) * step
+    while y <= gymax + step * 0.5:
+        lines.append(QLineF(_proj(gxmin, y, z_floor), _proj(gxmax, y, z_floor)))
+        y += step
+    x = math.floor(gxmin / step) * step
+    while x <= gxmax + step * 0.5:
+        lines.append(QLineF(_proj(x, gymin, z_floor), _proj(x, gymax, z_floor)))
+        x += step
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Viewport widget (pure drawing — no labels)
+# ---------------------------------------------------------------------------
+
+class _IsometricViewport(QWidget):
+    """Renders the isometric toolpath view via QPainter."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setMinimumSize(160, 120)
+        # No setMouseTracking — we only need move events while a button is held.
+        self.setCursor(Qt.CursorShape.CrossCursor)
+
+        self._segs: list[_SegGeom] = []
+        self._highlighted: int | None = None
+        self._grid_lines: list[QLineF] = []
+        self._wp_poly: QPolygonF | None = None
+        self._cut_bounds: tuple[float, float, float, float, float] | None = None
+
+        # World bounding rect in projected (screen) coords before zoom/pan.
+        self._world_rect = QRectF(-10.0, -30.0, 60.0, 40.0)
+
+        # View state.
+        self._zoom: float = 1.0
+        self._pan = QPointF(0.0, 0.0)
+        self._drag_start: QPointF | None = None
+        self._pan_at_drag: QPointF | None = None
+
+    # ------------------------------------------------------------------
+    # Public
+    # ------------------------------------------------------------------
+
+    def load_toolpath(self, toolpath: ToolPath) -> None:
+        """Pre-project all segments and reset the view."""
+        self._build_geometry(toolpath)
+        self.fit_view()   # also calls update()
+
+    def set_highlight(self, line_number: int | None) -> None:
+        """Change the highlighted line and trigger a repaint."""
+        if self._highlighted == line_number:
+            return
+        self._highlighted = line_number
+        self.update()
+
+    def fit_view(self) -> None:
+        """Reset zoom/pan so the full toolpath fits in the widget."""
+        w, h = self.width(), self.height()
+        if w < 2 or h < 2:
+            return
+        r = self._world_rect
+        if r.isEmpty():
+            self._zoom = 1.0
+            self._pan = QPointF(w / 2.0, h / 2.0)
+        else:
+            margin = max(r.width(), r.height()) * 0.08 + 5.0
+            rp = r.adjusted(-margin, -margin, margin, margin)
+            self._zoom = min(w / rp.width(), h / rp.height())
+            cx = rp.center().x() * self._zoom
+            cy = rp.center().y() * self._zoom
+            self._pan = QPointF(w / 2.0 - cx, h / 2.0 - cy)
+        self.update()
+
+    # ------------------------------------------------------------------
+    # Qt events
+    # ------------------------------------------------------------------
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.fit_view()
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        factor = 1.15 if event.angleDelta().y() > 0 else 1.0 / 1.15
+        pos = event.position()
+        self._pan = QPointF(
+            pos.x() - factor * (pos.x() - self._pan.x()),
+            pos.y() - factor * (pos.y() - self._pan.y()),
+        )
+        self._zoom *= factor
+        self.update()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = event.position()
+            self._pan_at_drag = QPointF(self._pan)
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._drag_start is not None and self._pan_at_drag is not None:
+            delta = event.position() - self._drag_start
+            self._pan = QPointF(
+                self._pan_at_drag.x() + delta.x(),
+                self._pan_at_drag.y() + delta.y(),
+            )
+            self.update()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start = None
+            self._pan_at_drag = None
+            self.setCursor(Qt.CursorShape.CrossCursor)
+
+    # ------------------------------------------------------------------
+    # Paint
+    # ------------------------------------------------------------------
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.fillRect(self.rect(), _BG_COLOR)
+
+        if not self._segs:
+            p.setPen(_cosmetic_pen(_TEXT_HINT_COLOR, 1.0))
+            p.drawText(
+                self.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                "G-Code Laden um Vorschau zu sehen",
+            )
+            p.end()
+            return
+
+        # Apply view transform (zoom + pan) for all world-space drawing.
+        p.save()
+        p.translate(self._pan)
+        p.scale(self._zoom, self._zoom)
+
+        # Layer 1: grid.
+        if self._grid_lines:
+            p.setPen(_PEN_GRID)
+            p.drawLines(self._grid_lines)
+
+        # Layer 2: workpiece surface.
+        if self._wp_poly is not None:
+            p.setPen(_PEN_WP_EDGE)
+            p.setBrush(QBrush(_WP_FILL))
+            p.drawPolygon(self._wp_poly)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+
+        # Layer 3: axis arrows.
+        self._paint_axes(p)
+
+        # Layer 4: toolpath lines — split into three buckets.
+        rapid: list[QLineF] = []
+        cut: list[QLineF] = []
+        hi: list[QLineF] = []
+        hl = self._highlighted
+        for seg in self._segs:
+            pts = seg.points
+            is_hl = seg.line_number == hl
+            for i in range(len(pts) - 1):
+                ln = QLineF(pts[i], pts[i + 1])
+                if is_hl:
+                    hi.append(ln)
+                elif seg.is_rapid:
+                    rapid.append(ln)
+                else:
+                    cut.append(ln)
+
+        if rapid:
+            p.setPen(_PEN_RAPID)
+            p.drawLines(rapid)
+        if cut:
+            p.setPen(_PEN_CUT)
+            p.drawLines(cut)
+        if hi:
+            p.setPen(_PEN_HIGHLIGHT)
+            p.drawLines(hi)
+
+        p.restore()
+        p.end()
+
+    # ------------------------------------------------------------------
+    # Geometry build (called once per toolpath load)
+    # ------------------------------------------------------------------
+
+    def _build_geometry(self, toolpath: ToolPath) -> None:
+        """Pre-project all segments from the toolpath into screen coords."""
+        self._segs = []
+        self._grid_lines = []
+        self._wp_poly = None
+        self._cut_bounds = None
+
+        if not toolpath or not toolpath.segments:
+            self._world_rect = QRectF(-10.0, -30.0, 60.0, 40.0)
+            return
+
+        all_proj: list[QPointF] = [_proj(0, 0, 0)]
+        cut_wx: list[float] = []
+        cut_wy: list[float] = []
+        cut_wz: list[float] = []
+
+        for seg in toolpath.segments:
+            is_rapid = seg.type == PathType.RAPID
+            if seg.arc_points:
+                pts = [_proj(p[0], p[1], p[2]) for p in seg.arc_points]
+                if not is_rapid:
+                    cut_wx.extend(p[0] for p in seg.arc_points)
+                    cut_wy.extend(p[1] for p in seg.arc_points)
+                    cut_wz.extend(p[2] for p in seg.arc_points)
+            else:
+                pts = [
+                    _proj(seg.start_x, seg.start_y, seg.start_z),
+                    _proj(seg.end_x, seg.end_y, seg.end_z),
+                ]
+                if not is_rapid:
+                    cut_wx.extend([seg.start_x, seg.end_x])
+                    cut_wy.extend([seg.start_y, seg.end_y])
+                    cut_wz.extend([seg.start_z, seg.end_z])
+            all_proj.extend(pts)
+            self._segs.append(_SegGeom(
+                line_number=seg.line_number,
+                is_rapid=is_rapid,
+                points=pts,
+            ))
+
+        # Compute world bounding rect in projected (screen) coords.
+        min_sx = min(q.x() for q in all_proj)
+        max_sx = max(q.x() for q in all_proj)
+        min_sy = min(q.y() for q in all_proj)
+        max_sy = max(q.y() for q in all_proj)
+        self._world_rect = QRectF(
+            min_sx, min_sy,
+            max(max_sx - min_sx, 1.0),
+            max(max_sy - min_sy, 1.0),
+        )
+
+        if not cut_wx:
+            return
+
+        z_floor = min(cut_wz)
+        wx_min, wx_max = min(cut_wx), max(cut_wx)
+        wy_min, wy_max = min(cut_wy), max(cut_wy)
+        self._cut_bounds = (wx_min, wx_max, wy_min, wy_max, z_floor)
+
+        self._grid_lines = _make_grid_lines(wx_min, wx_max, wy_min, wy_max, z_floor)
+
+        if wx_min < wx_max and wy_min < wy_max:
+            self._wp_poly = QPolygonF([
+                _proj(wx_min, wy_min, z_floor),
+                _proj(wx_max, wy_min, z_floor),
+                _proj(wx_max, wy_max, z_floor),
+                _proj(wx_min, wy_max, z_floor),
+            ])
+
+    def _paint_axes(self, p: QPainter) -> None:
+        """Draw X / Y / Z axis arrows at the world origin."""
+        if self._cut_bounds is not None:
+            wx_min, wx_max, wy_min, wy_max, z_floor = self._cut_bounds
+            arrow_len = max((wx_max - wx_min) * 0.08, (wy_max - wy_min) * 0.08, 5.0)
+        else:
+            z_floor, arrow_len = 0.0, 5.0
+
+        o = _proj(0.0, 0.0, z_floor)
+        for dx, dy, dz, pen in (
+            (arrow_len, 0.0, 0.0, _PEN_AX_X),
+            (0.0, arrow_len, 0.0, _PEN_AX_Y),
+            (0.0, 0.0, arrow_len, _PEN_AX_Z),
+        ):
+            e = _proj(dx, dy, dz + z_floor)
+            p.setPen(pen)
+            p.drawLine(o, e)
+
+
+# ---------------------------------------------------------------------------
+# CanvasPanel  (public widget used by MainWindow — same interface as before)
 # ---------------------------------------------------------------------------
 
 class CanvasPanel(QWidget):
-    """Side-panel rendering the tool path using a 2-D isometric projection.
+    """Tool-path visualization panel using a native QPainter renderer.
 
-    Switching from matplotlib Axes3D to a plain 2-D axes with a manual
-    isometric projection provides two major benefits:
+    The previous matplotlib backend caused two problems: the canvas shrank a
+    little on every editor click (tight_layout + colorbar resizing bug) and
+    rendering was slow for complex toolpaths (one ``plot()`` call per segment).
 
-    * **No shrinking on re-draw**: the 3-D colorbar + tight_layout combo
-      shrank the axes a little each time ``_redraw()`` was called (e.g. on
-      every editor-line selection).  The 2-D approach uses a fixed axes
-      rectangle and never adds a colorbar.
-    * **Speed**: all line segments are batched into a single
-      ``LineCollection`` per layer instead of one ``plot()`` call per
-      segment, which is ~10–100× faster for complex toolpaths.
+    This implementation uses Qt's own QPainter so that all line segments are
+    drawn in a single C++ call per layer.  Interactive zoom and pan are built
+    in at zero cost.
     """
 
     segment_selected = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._toolpath: ToolPath | None = None
-        self._highlighted_line: int | None = None
         self._setup_ui()
 
-    # ------------------------------------------------------------------
-    # Setup
-    # ------------------------------------------------------------------
-
     def _setup_ui(self) -> None:
-        """Build the layout: navigation toolbar → canvas → warning label → dims label."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Figure with a fixed axes rectangle — no tight_layout so the axes
-        # pixel size never changes between redraws.
-        self._figure = Figure(facecolor=_BG_COLOR)
-        self._axes = self._figure.add_axes([0.02, 0.04, 0.96, 0.94])
-        self._axes.set_facecolor(_BG_COLOR)
-        self._axes.set_aspect("equal", adjustable="datalim")
-        self._axes.axis("off")
+        # --- toolbar row with Fit button ---
+        toolbar = QWidget()
+        tb = QHBoxLayout(toolbar)
+        tb.setContentsMargins(4, 2, 4, 2)
+        tb.setSpacing(4)
+        self._fit_btn = QPushButton("⊞ Fit")
+        self._fit_btn.setToolTip("Zoom Zurücksetzen / Alles anzeigen")
+        self._fit_btn.setFixedHeight(24)
+        self._fit_btn.clicked.connect(self._on_fit)
+        tb.addWidget(self._fit_btn)
+        tb.addStretch(1)
+        layout.addWidget(toolbar)
 
-        self._mpl_canvas = FigureCanvasQTAgg(self._figure)
-        self._nav_toolbar = NavigationToolbar2QT(self._mpl_canvas, self)
-        layout.addWidget(self._nav_toolbar)
-        layout.addWidget(self._mpl_canvas, stretch=1)
+        # --- drawing viewport ---
+        self._viewport = _IsometricViewport()
+        layout.addWidget(self._viewport, stretch=1)
 
+        # --- warning label ---
         self._warning_label = QLabel("")
-        self._warning_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self._warning_label.setAlignment(
+            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
+        )
         self._warning_label.setWordWrap(True)
-        self._warning_label.setStyleSheet("color: #CC6600; font-size: 11px; padding: 4px;")
+        self._warning_label.setStyleSheet(
+            "color: #CC6600; font-size: 11px; padding: 4px;"
+        )
         layout.addWidget(self._warning_label, stretch=0)
 
+        # --- dimensions label ---
         self._dims_label = QLabel("")
         self._dims_label.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self._dims_label.setStyleSheet(
@@ -141,25 +462,21 @@ class CanvasPanel(QWidget):
         self._dims_label.hide()
         layout.addWidget(self._dims_label, stretch=0)
 
-        self._draw_empty_canvas()
-
     # ------------------------------------------------------------------
-    # Public API
+    # Public API  (identical signatures to the old matplotlib CanvasPanel)
     # ------------------------------------------------------------------
 
     def render_toolpath(self, toolpath: ToolPath) -> None:
         """Render *toolpath* onto the canvas."""
-        self._toolpath = toolpath
-        self._highlighted_line = None
-        self._redraw()
+        self._viewport.load_toolpath(toolpath)
+        self._update_dims_label(toolpath)
 
     def highlight_segment(self, line_number: int) -> None:
-        """Highlight the path segment whose G-Code line is *line_number*."""
-        self._highlighted_line = line_number
-        self._redraw()
+        """Highlight the segment corresponding to the given G-Code line."""
+        self._viewport.set_highlight(line_number)
 
     def show_warnings(self, warnings: list[AnalysisWarning]) -> None:
-        """Display a summary of analysis warnings below the canvas."""
+        """Display analysis warnings below the canvas."""
         if not warnings:
             self._warning_label.setText("")
             self._warning_label.hide()
@@ -173,265 +490,21 @@ class CanvasPanel(QWidget):
         self._warning_label.show()
 
     # ------------------------------------------------------------------
-    # Internal rendering
+    # Private
     # ------------------------------------------------------------------
 
-    def _draw_empty_canvas(self) -> None:
-        """Show an empty isometric coordinate system (no toolpath loaded)."""
-        ax = self._axes
-        ax.clear()
-        ax.set_facecolor(_BG_COLOR)
-        ax.axis("off")
-        ox, oy = _proj(0.0, 0.0, 0.0)
-        ax.plot(ox, oy, "r+", markersize=10, markeredgewidth=1.5, zorder=5)
-        ax.set_xlim(*_DEFAULT_SX)
-        ax.set_ylim(*_DEFAULT_SY)
-        self._mpl_canvas.draw()
+    def _on_fit(self) -> None:
+        self._viewport.fit_view()
 
-    def _redraw(self) -> None:
-        """Clear the axes and repaint the complete isometric toolpath view."""
-        ax = self._axes
-        ax.clear()
-        ax.set_facecolor(_BG_COLOR)
-        ax.axis("off")
-        ax.set_aspect("equal", adjustable="datalim")
-
-        if not self._toolpath or not self._toolpath.segments:
-            ax.set_xlim(*_DEFAULT_SX)
-            ax.set_ylim(*_DEFAULT_SY)
-            self._mpl_canvas.draw()
+    def _update_dims_label(self, toolpath: ToolPath | None) -> None:
+        """Show workpiece dimensions (G1/G2/G3 only) in the dims label."""
+        if not toolpath or not toolpath.segments:
+            self._dims_label.hide()
             return
-
-        # ------------------------------------------------------------------
-        # Collect all world coordinates (for view fit) and cut-only coords
-        # (for workpiece bounding box and dims label).
-        # ------------------------------------------------------------------
-        all_wx: list[float] = [0.0]
-        all_wy: list[float] = [0.0]
-        all_wz: list[float] = [0.0]
-        cut_wx: list[float] = []
-        cut_wy: list[float] = []
-        cut_wz: list[float] = []
-
-        cut_segs = [s for s in self._toolpath.segments if s.type != PathType.RAPID]
-
-        for seg in self._toolpath.segments:
-            is_cut = seg.type != PathType.RAPID
-            if seg.arc_points:
-                px = [p[0] for p in seg.arc_points]
-                py = [p[1] for p in seg.arc_points]
-                pz = [p[2] for p in seg.arc_points]
-            else:
-                px = [seg.start_x, seg.end_x]
-                py = [seg.start_y, seg.end_y]
-                pz = [seg.start_z, seg.end_z]
-            all_wx.extend(px); all_wy.extend(py); all_wz.extend(pz)
-            if is_cut:
-                cut_wx.extend(px); cut_wy.extend(py); cut_wz.extend(pz)
-
-        # Work-plane Z floor: lowest Z in the cut moves (deepest cut).
-        z_floor = min(cut_wz) if cut_wz else 0.0
-        wp_xmin = min(cut_wx) if cut_wx else 0.0
-        wp_xmax = max(cut_wx) if cut_wx else 0.0
-        wp_ymin = min(cut_wy) if cut_wy else 0.0
-        wp_ymax = max(cut_wy) if cut_wy else 0.0
-
-        # ------------------------------------------------------------------
-        # Layer 1: grid floor
-        # ------------------------------------------------------------------
-        self._draw_grid_floor(ax, wp_xmin, wp_xmax, wp_ymin, wp_ymax, z_floor)
-
-        # ------------------------------------------------------------------
-        # Layer 2: workpiece surface
-        # ------------------------------------------------------------------
-        self._draw_workpiece_surface(ax, wp_xmin, wp_xmax, wp_ymin, wp_ymax, z_floor)
-
-        # ------------------------------------------------------------------
-        # Layer 3: toolpath lines (batched into LineCollections)
-        # ------------------------------------------------------------------
-        rapid_lines: list[list[tuple[float, float]]] = []
-        cut_lines: list[list[tuple[float, float]]] = []
-        highlight_lines: list[list[tuple[float, float]]] = []
-
-        for seg in self._toolpath.segments:
-            highlighted = seg.line_number == self._highlighted_line
-            if seg.arc_points:
-                pts = seg.arc_points
-                sxs, sys_ = _proj_arrays(
-                    [p[0] for p in pts],
-                    [p[1] for p in pts],
-                    [p[2] for p in pts],
-                )
-                # Convert arc into small line segments for LineCollection.
-                screen_pts = list(zip(sxs.tolist(), sys_.tolist()))
-                for i in range(len(screen_pts) - 1):
-                    segment_2pt = [screen_pts[i], screen_pts[i + 1]]
-                    if highlighted:
-                        highlight_lines.append(segment_2pt)
-                    elif seg.type == PathType.RAPID:
-                        rapid_lines.append(segment_2pt)
-                    else:
-                        cut_lines.append(segment_2pt)
-            else:
-                s1 = _proj(seg.start_x, seg.start_y, seg.start_z)
-                s2 = _proj(seg.end_x, seg.end_y, seg.end_z)
-                segment_2pt = [s1, s2]
-                if highlighted:
-                    highlight_lines.append(segment_2pt)
-                elif seg.type == PathType.RAPID:
-                    rapid_lines.append(segment_2pt)
-                else:
-                    cut_lines.append(segment_2pt)
-
-        if rapid_lines:
-            ax.add_collection(LineCollection(
-                rapid_lines, colors=_RAPID_COLOR,
-                linewidths=0.9, linestyles="--", zorder=4,
-            ))
-        if cut_lines:
-            ax.add_collection(LineCollection(
-                cut_lines, colors=_CUT_COLOR,
-                linewidths=1.1, zorder=5,
-            ))
-        if highlight_lines:
-            ax.add_collection(LineCollection(
-                highlight_lines, colors=_HIGHLIGHT_COLOR,
-                linewidths=2.5, zorder=7,
-            ))
-
-        # ------------------------------------------------------------------
-        # Layer 4: coordinate axis arrows
-        # ------------------------------------------------------------------
-        self._draw_axis_arrows(ax, wp_xmin, wp_xmax, wp_ymin, wp_ymax, z_floor)
-
-        # ------------------------------------------------------------------
-        # Fit view and update dimensions label
-        # ------------------------------------------------------------------
-        self._fit_view(ax, all_wx, all_wy, all_wz)
-        self._update_dims_label(cut_segs)
-        self._mpl_canvas.draw()
-
-    def _draw_grid_floor(
-        self,
-        ax,
-        xmin: float, xmax: float,
-        ymin: float, ymax: float,
-        z_floor: float,
-    ) -> None:
-        """Draw a regular grid in the XY plane at *z_floor*."""
-        pad_x = max((xmax - xmin) * 0.25, 5.0)
-        pad_y = max((ymax - ymin) * 0.25, 5.0)
-        gxmin, gxmax = xmin - pad_x, xmax + pad_x
-        gymin, gymax = ymin - pad_y, ymax + pad_y
-
-        span = max(gxmax - gxmin, gymax - gymin, 1.0)
-        raw_step = span / 10.0
-        magnitude = 10 ** math.floor(math.log10(raw_step))
-        step = next(
-            (n * magnitude for n in (1, 2, 5, 10) if raw_step <= n * magnitude),
-            10 * magnitude,
-        )
-
-        grid_lines: list[list[tuple[float, float]]] = []
-
-        # Lines parallel to the X axis (constant Y, varying X).
-        y = math.floor(gymin / step) * step
-        while y <= gymax + step * 0.5:
-            p1 = _proj(gxmin, y, z_floor)
-            p2 = _proj(gxmax, y, z_floor)
-            grid_lines.append([p1, p2])
-            y += step
-
-        # Lines parallel to the Y axis (constant X, varying Y).
-        x = math.floor(gxmin / step) * step
-        while x <= gxmax + step * 0.5:
-            p1 = _proj(x, gymin, z_floor)
-            p2 = _proj(x, gymax, z_floor)
-            grid_lines.append([p1, p2])
-            x += step
-
-        if grid_lines:
-            ax.add_collection(LineCollection(
-                grid_lines, colors=_GRID_COLOR, linewidths=0.5, zorder=1,
-            ))
-
-    def _draw_workpiece_surface(
-        self,
-        ax,
-        xmin: float, xmax: float,
-        ymin: float, ymax: float,
-        z_floor: float,
-    ) -> None:
-        """Draw a semi-transparent rectangle for the workpiece XY surface."""
-        if xmin >= xmax or ymin >= ymax:
-            return
-        corners = [
-            _proj(xmin, ymin, z_floor),
-            _proj(xmax, ymin, z_floor),
-            _proj(xmax, ymax, z_floor),
-            _proj(xmin, ymax, z_floor),
-        ]
-        poly = MplPolygon(
-            corners, closed=True,
-            facecolor=_WORKPIECE_FACE, edgecolor=_WORKPIECE_EDGE,
-            linewidth=1.0, alpha=0.75, zorder=2,
-        )
-        ax.add_patch(poly)
-
-    def _draw_axis_arrows(
-        self,
-        ax,
-        xmin: float, xmax: float,
-        ymin: float, ymax: float,
-        z_floor: float,
-    ) -> None:
-        """Draw small X/Y/Z axis arrows at the world origin."""
-        arrow_len = max((xmax - xmin) * 0.06, (ymax - ymin) * 0.06, 3.0)
-        ox, oy = _proj(0.0, 0.0, z_floor)
-        arrow_kw = dict(width=0.0, head_width=arrow_len * 0.15,
-                        head_length=arrow_len * 0.18,
-                        length_includes_head=True, zorder=8)
-
-        for (dx, dy, dz), color, label in (
-            ((arrow_len, 0, 0), _AX_X, "X"),
-            ((0, arrow_len, 0), _AX_Y, "Y"),
-            ((0, 0, arrow_len), _AX_Z, "Z"),
-        ):
-            ex, ey = _proj(dx, dy, dz + z_floor)
-            ax.arrow(ox, oy, ex - ox, ey - oy, fc=color, ec=color, **arrow_kw)
-            ax.text(ex + (ex - ox) * 0.12, ey + (ey - oy) * 0.12,
-                    label, color=color, fontsize=7, fontweight="bold",
-                    ha="center", va="center", zorder=9)
-
-        ax.plot(ox, oy, "r+", markersize=8, markeredgewidth=1.5, zorder=9)
-
-    def _fit_view(
-        self,
-        ax,
-        wx: list[float],
-        wy: list[float],
-        wz: list[float],
-    ) -> None:
-        """Set 2-D axis limits so that all projected points are visible."""
-        if not wx:
-            ax.set_xlim(*_DEFAULT_SX)
-            ax.set_ylim(*_DEFAULT_SY)
-            return
-
-        sxs, sys_ = _proj_arrays(wx, wy, wz)
-        sx_min, sx_max = float(sxs.min()), float(sxs.max())
-        sy_min, sy_max = float(sys_.min()), float(sys_.max())
-        mx = max((sx_max - sx_min) * 0.07, 3.0)
-        my = max((sy_max - sy_min) * 0.07, 3.0)
-        ax.set_xlim(sx_min - mx, sx_max + mx)
-        ax.set_ylim(sy_min - my, sy_max + my)
-
-    def _update_dims_label(self, cut_segs: list) -> None:
-        """Show workpiece dimensions (G1/G2/G3 moves only) in the info label."""
+        cut_segs = [s for s in toolpath.segments if s.type != PathType.RAPID]
         if not cut_segs:
             self._dims_label.hide()
             return
-
         xs: list[float] = []
         ys: list[float] = []
         zs: list[float] = []
@@ -444,11 +517,10 @@ class CanvasPanel(QWidget):
                 xs.extend([s.start_x, s.end_x])
                 ys.extend([s.start_y, s.end_y])
                 zs.extend([s.start_z, s.end_z])
-
-        width = max(xs) - min(xs)
-        height = max(ys) - min(ys)
-        depth = max(zs) - min(zs)
+        w = max(xs) - min(xs)
+        h = max(ys) - min(ys)
+        d = max(zs) - min(zs)
         self._dims_label.setText(
-            f"Werkstück  ·  X: {width:.2f} mm   Y: {height:.2f} mm   Z: {depth:.2f} mm"
+            f"Werkstück  ·  X: {w:.2f} mm   Y: {h:.2f} mm   Z: {d:.2f} mm"
         )
         self._dims_label.show()
