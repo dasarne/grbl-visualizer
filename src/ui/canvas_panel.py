@@ -97,6 +97,7 @@ _PEN_AX_Z = _cosmetic_pen(_AX_Z_COLOR, 1.5)
 class _SegGeom:
     line_number: int | None
     is_rapid: bool
+    world_points: list[tuple[float, float, float]]
     points: list[QPointF]   # projected 2-D screen points (2 for linear, N for arc)
 
 
@@ -108,8 +109,8 @@ def _make_grid_lines(
     xmin: float, xmax: float,
     ymin: float, ymax: float,
     z_floor: float,
-) -> list[QLineF]:
-    """Build grid QLineF list for the XY floor plane at *z_floor*."""
+) -> list[tuple[tuple[float, float, float], tuple[float, float, float]]]:
+    """Build grid line endpoints in world coords for the XY floor plane."""
     pad_x = max((xmax - xmin) * 0.25, 5.0)
     pad_y = max((ymax - ymin) * 0.25, 5.0)
     gxmin, gxmax = xmin - pad_x, xmax + pad_x
@@ -123,14 +124,14 @@ def _make_grid_lines(
         10 * magnitude,
     )
 
-    lines: list[QLineF] = []
+    lines: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
     y = math.floor(gymin / step) * step
     while y <= gymax + step * 0.5:
-        lines.append(QLineF(_proj(gxmin, y, z_floor), _proj(gxmax, y, z_floor)))
+        lines.append(((gxmin, y, z_floor), (gxmax, y, z_floor)))
         y += step
     x = math.floor(gxmin / step) * step
     while x <= gxmax + step * 0.5:
-        lines.append(QLineF(_proj(x, gymin, z_floor), _proj(x, gymax, z_floor)))
+        lines.append(((x, gymin, z_floor), (x, gymax, z_floor)))
         x += step
     return lines
 
@@ -151,7 +152,11 @@ class _IsometricViewport(QWidget):
         self._segs: list[_SegGeom] = []
         self._highlighted: int | None = None
         self._grid_lines: list[QLineF] = []
+        self._grid_world: list[
+            tuple[tuple[float, float, float], tuple[float, float, float]]
+        ] = []
         self._wp_poly: QPolygonF | None = None
+        self._wp_world: list[tuple[float, float, float]] = []
         self._cut_bounds: tuple[float, float, float, float, float] | None = None
 
         # World bounding rect in projected (screen) coords before zoom/pan.
@@ -162,6 +167,15 @@ class _IsometricViewport(QWidget):
         self._pan = QPointF(0.0, 0.0)
         self._drag_start: QPointF | None = None
         self._pan_at_drag: QPointF | None = None
+
+        # Ctrl + right mouse drag rotates the view like a 3D viewport.
+        self._yaw_deg: float = 30.0
+        self._pitch_deg: float = 35.26438968
+        self._rot_drag_start: QPointF | None = None
+        self._yaw_at_drag: float | None = None
+        self._pitch_at_drag: float | None = None
+        self._rot_anchor_world: tuple[float, float, float] | None = None
+        self._rot_anchor_screen: QPointF | None = None
 
     # ------------------------------------------------------------------
     # Public
@@ -216,12 +230,50 @@ class _IsometricViewport(QWidget):
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        if (
+            event.button() == Qt.MouseButton.RightButton
+            and (event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+        ):
+            self._rot_drag_start = event.position()
+            self._yaw_at_drag = self._yaw_deg
+            self._pitch_at_drag = self._pitch_deg
+            self._rot_anchor_screen = QPointF(event.position())
+            self._rot_anchor_world = self._pick_world_anchor(event.position())
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            event.accept()
+            return
+
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = event.position()
             self._pan_at_drag = QPointF(self._pan)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if (
+            self._rot_drag_start is not None
+            and self._yaw_at_drag is not None
+            and self._pitch_at_drag is not None
+        ):
+            delta = event.position() - self._rot_drag_start
+            sensitivity = 0.35  # degrees per pixel
+            self._yaw_deg = self._yaw_at_drag + delta.x() * sensitivity
+            self._pitch_deg = self._pitch_at_drag - delta.y() * sensitivity
+            self._pitch_deg = max(-89.0, min(89.0, self._pitch_deg))
+            self._reproject_geometry()
+            if self._rot_anchor_world is not None and self._rot_anchor_screen is not None:
+                anchor_proj = self._project(*self._rot_anchor_world)
+                self._pan = QPointF(
+                    self._rot_anchor_screen.x() - anchor_proj.x() * self._zoom,
+                    self._rot_anchor_screen.y() - anchor_proj.y() * self._zoom,
+                )
+            self.update()
+            event.accept()
+            return
+
         if self._drag_start is not None and self._pan_at_drag is not None:
             delta = event.position() - self._drag_start
             self._pan = QPointF(
@@ -229,12 +281,30 @@ class _IsometricViewport(QWidget):
                 self._pan_at_drag.y() + delta.y(),
             )
             self.update()
+            event.accept()
+            return
+
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.RightButton:
+            self._rot_drag_start = None
+            self._yaw_at_drag = None
+            self._pitch_at_drag = None
+            self._rot_anchor_world = None
+            self._rot_anchor_screen = None
+            self.setCursor(Qt.CursorShape.CrossCursor)
+            event.accept()
+            return
+
         if event.button() == Qt.MouseButton.LeftButton:
             self._drag_start = None
             self._pan_at_drag = None
             self.setCursor(Qt.CursorShape.CrossCursor)
+            event.accept()
+            return
+
+        super().mouseReleaseEvent(event)
 
     # ------------------------------------------------------------------
     # Paint
@@ -309,47 +379,94 @@ class _IsometricViewport(QWidget):
     # Geometry build (called once per toolpath load)
     # ------------------------------------------------------------------
 
-    def _build_geometry(self, toolpath: ToolPath) -> None:
-        """Pre-project all segments from the toolpath into screen coords."""
-        self._segs = []
-        self._grid_lines = []
-        self._wp_poly = None
-        self._cut_bounds = None
+    def _project(self, x: float, y: float, z: float) -> QPointF:
+        """Project world point using current yaw/pitch (orthographic)."""
+        yaw = math.radians(self._yaw_deg)
+        pitch = math.radians(self._pitch_deg)
 
-        if not toolpath or not toolpath.segments:
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        cp, sp = math.cos(pitch), math.sin(pitch)
+
+        # Yaw around Z axis.
+        x1 = x * cy - y * sy
+        y1 = x * sy + y * cy
+        z1 = z
+
+        # Pitch around X axis.
+        x2 = x1
+        y2 = y1 * cp - z1 * sp
+        z2 = y1 * sp + z1 * cp
+        return QPointF(x2, -z2)
+
+    def _pick_world_anchor(self, screen_pos: QPointF) -> tuple[float, float, float] | None:
+        """Pick the nearest world point on projected segment polylines."""
+        if not self._segs or self._zoom == 0.0:
+            return None
+
+        px = (screen_pos.x() - self._pan.x()) / self._zoom
+        py = (screen_pos.y() - self._pan.y()) / self._zoom
+        click = QPointF(px, py)
+
+        best_dist2 = float("inf")
+        best_world: tuple[float, float, float] | None = None
+
+        for seg in self._segs:
+            ppts = seg.points
+            wpts = seg.world_points
+            if len(ppts) < 2 or len(wpts) < 2:
+                continue
+            for i in range(min(len(ppts), len(wpts)) - 1):
+                a = ppts[i]
+                b = ppts[i + 1]
+                dx = b.x() - a.x()
+                dy = b.y() - a.y()
+                denom = dx * dx + dy * dy
+                if denom <= 1e-12:
+                    t = 0.0
+                else:
+                    t = ((click.x() - a.x()) * dx + (click.y() - a.y()) * dy) / denom
+                    t = max(0.0, min(1.0, t))
+
+                qx = a.x() + t * dx
+                qy = a.y() + t * dy
+                dist2 = (click.x() - qx) ** 2 + (click.y() - qy) ** 2
+
+                if dist2 < best_dist2:
+                    wa = wpts[i]
+                    wb = wpts[i + 1]
+                    best_dist2 = dist2
+                    best_world = (
+                        wa[0] + t * (wb[0] - wa[0]),
+                        wa[1] + t * (wb[1] - wa[1]),
+                        wa[2] + t * (wb[2] - wa[2]),
+                    )
+
+        return best_world
+
+    def _reproject_geometry(self) -> None:
+        """Rebuild projected geometry from cached world-space points."""
+        if not self._segs:
+            self._grid_lines = []
+            self._wp_poly = None
             self._world_rect = QRectF(-10.0, -30.0, 60.0, 40.0)
             return
 
-        all_proj: list[QPointF] = [_proj(0, 0, 0)]
-        cut_wx: list[float] = []
-        cut_wy: list[float] = []
-        cut_wz: list[float] = []
+        all_proj: list[QPointF] = [self._project(0.0, 0.0, 0.0)]
 
-        for seg in toolpath.segments:
-            is_rapid = seg.type == PathType.RAPID
-            if seg.arc_points:
-                pts = [_proj(p[0], p[1], p[2]) for p in seg.arc_points]
-                if not is_rapid:
-                    cut_wx.extend(p[0] for p in seg.arc_points)
-                    cut_wy.extend(p[1] for p in seg.arc_points)
-                    cut_wz.extend(p[2] for p in seg.arc_points)
-            else:
-                pts = [
-                    _proj(seg.start_x, seg.start_y, seg.start_z),
-                    _proj(seg.end_x, seg.end_y, seg.end_z),
-                ]
-                if not is_rapid:
-                    cut_wx.extend([seg.start_x, seg.end_x])
-                    cut_wy.extend([seg.start_y, seg.end_y])
-                    cut_wz.extend([seg.start_z, seg.end_z])
-            all_proj.extend(pts)
-            self._segs.append(_SegGeom(
-                line_number=seg.line_number,
-                is_rapid=is_rapid,
-                points=pts,
-            ))
+        for seg in self._segs:
+            seg.points = [self._project(x, y, z) for (x, y, z) in seg.world_points]
+            all_proj.extend(seg.points)
 
-        # Compute world bounding rect in projected (screen) coords.
+        self._grid_lines = [
+            QLineF(self._project(*a), self._project(*b))
+            for (a, b) in self._grid_world
+        ]
+
+        self._wp_poly = (
+            QPolygonF([self._project(*p) for p in self._wp_world])
+            if self._wp_world else None
+        )
+
         min_sx = min(q.x() for q in all_proj)
         max_sx = max(q.x() for q in all_proj)
         min_sy = min(q.y() for q in all_proj)
@@ -360,23 +477,64 @@ class _IsometricViewport(QWidget):
             max(max_sy - min_sy, 1.0),
         )
 
-        if not cut_wx:
+    def _build_geometry(self, toolpath: ToolPath) -> None:
+        """Cache world geometry and project it with the current view rotation."""
+        self._segs = []
+        self._grid_lines = []
+        self._grid_world = []
+        self._wp_poly = None
+        self._wp_world = []
+        self._cut_bounds = None
+
+        if not toolpath or not toolpath.segments:
+            self._world_rect = QRectF(-10.0, -30.0, 60.0, 40.0)
             return
 
-        z_floor = min(cut_wz)
-        wx_min, wx_max = min(cut_wx), max(cut_wx)
-        wy_min, wy_max = min(cut_wy), max(cut_wy)
-        self._cut_bounds = (wx_min, wx_max, wy_min, wy_max, z_floor)
+        cut_wx: list[float] = []
+        cut_wy: list[float] = []
+        cut_wz: list[float] = []
 
-        self._grid_lines = _make_grid_lines(wx_min, wx_max, wy_min, wy_max, z_floor)
+        for seg in toolpath.segments:
+            is_rapid = seg.type == PathType.RAPID
+            if seg.arc_points:
+                world_pts = [(p[0], p[1], p[2]) for p in seg.arc_points]
+                if not is_rapid:
+                    cut_wx.extend(p[0] for p in seg.arc_points)
+                    cut_wy.extend(p[1] for p in seg.arc_points)
+                    cut_wz.extend(p[2] for p in seg.arc_points)
+            else:
+                world_pts = [
+                    (seg.start_x, seg.start_y, seg.start_z),
+                    (seg.end_x, seg.end_y, seg.end_z),
+                ]
+                if not is_rapid:
+                    cut_wx.extend([seg.start_x, seg.end_x])
+                    cut_wy.extend([seg.start_y, seg.end_y])
+                    cut_wz.extend([seg.start_z, seg.end_z])
+            self._segs.append(_SegGeom(
+                line_number=seg.line_number,
+                is_rapid=is_rapid,
+                world_points=world_pts,
+                points=[],
+            ))
 
-        if wx_min < wx_max and wy_min < wy_max:
-            self._wp_poly = QPolygonF([
-                _proj(wx_min, wy_min, z_floor),
-                _proj(wx_max, wy_min, z_floor),
-                _proj(wx_max, wy_max, z_floor),
-                _proj(wx_min, wy_max, z_floor),
-            ])
+        if cut_wx:
+            z_floor = min(cut_wz)
+            wx_min, wx_max = min(cut_wx), max(cut_wx)
+            wy_min, wy_max = min(cut_wy), max(cut_wy)
+            self._cut_bounds = (wx_min, wx_max, wy_min, wy_max, z_floor)
+
+            self._grid_world = _make_grid_lines(wx_min, wx_max, wy_min, wy_max, z_floor)
+
+            if wx_min < wx_max and wy_min < wy_max:
+                self._wp_world = [
+                    (wx_min, wy_min, z_floor),
+                    (wx_max, wy_min, z_floor),
+                    (wx_max, wy_max, z_floor),
+                    (wx_min, wy_max, z_floor),
+                ]
+
+        self._reproject_geometry()
 
     def _paint_axes(self, p: QPainter) -> None:
         """Draw X / Y / Z axis arrows at the world origin."""
@@ -386,13 +544,13 @@ class _IsometricViewport(QWidget):
         else:
             z_floor, arrow_len = 0.0, 5.0
 
-        o = _proj(0.0, 0.0, z_floor)
+        o = self._project(0.0, 0.0, z_floor)
         for dx, dy, dz, pen in (
             (arrow_len, 0.0, 0.0, _PEN_AX_X),
             (0.0, arrow_len, 0.0, _PEN_AX_Y),
             (0.0, 0.0, arrow_len, _PEN_AX_Z),
         ):
-            e = _proj(dx, dy, dz + z_floor)
+            e = self._project(dx, dy, dz + z_floor)
             p.setPen(pen)
             p.drawLine(o, e)
 
