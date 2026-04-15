@@ -1,4 +1,10 @@
-# GRBL Visualizer
+# GCode Lisa
+
+![GCode Lisa](assets/Lisa.svg)
+
+> Cut with confidence.
+>
+> Waste less.
 
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![PyQt6](https://img.shields.io/badge/PyQt6-6.4+-green.svg)
@@ -41,6 +47,21 @@ pip install -r requirements.txt
 python -m src.main
 ```
 
+## Install on Linux
+
+Register launcher + file associations for `*.gcode` and `*.nc`:
+
+```bash
+chmod +x scripts/install_linux.sh scripts/uninstall_linux.sh
+./scripts/install_linux.sh
+```
+
+Remove registration:
+
+```bash
+./scripts/uninstall_linux.sh
+```
+
 > **Arch Linux note:** Arch enforces the "externally managed environment" policy (PEP 668),
 > which prevents system-wide `pip install`.  Always activate the `.venv` first.
 
@@ -61,6 +82,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design document.
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for environment setup, testing, and code style guidelines.
+
+## Keyboard Shortcuts
+
+- `Ctrl+O`: Open file
+- `Ctrl+I`: Open info/about dialog
+- `Ctrl+Q`: Quit
 
 > **Note:** This project uses an AI-assisted development workflow where GitHub Copilot coding agent implements features described in structured issues, guided by skills and architecture documents.
 

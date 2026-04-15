@@ -1,17 +1,18 @@
-"""Setup configuration for GRBL Visualizer."""
+"""Setup configuration for GCode Lisa."""
 
 from setuptools import setup, find_packages
 
 setup(
-    name="grbl-visualizer",
+    name="gcode-lisa",
     version="0.1.0",
-    description="GRBL G-Code Visualizer & Analyzer for CNC Machines",
+    description="GCode Lisa - Cut with confidence. Waste less.",
     author="dasarne",
     python_requires=">=3.10",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
     entry_points={
         "console_scripts": [
+            "gcode-lisa=src.main:main",
             "grbl-visualizer=src.main:main",
         ],
     },

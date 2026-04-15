@@ -23,17 +23,19 @@ X goes to the right, Y recedes to the upper-right at 30°, Z goes up.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from dataclasses import dataclass
 
 from PyQt6.QtCore import Qt, QLineF, QPointF, QRectF, pyqtSignal
 from PyQt6.QtGui import (
     QBrush, QColor, QMouseEvent, QPaintEvent, QPainter, QPen,
-    QPolygonF, QResizeEvent, QWheelEvent,
+    QPolygonF, QResizeEvent, QWheelEvent, QPixmap,
 )
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ..analyzer.analyzer import AnalysisWarning, WarningSeverity
 from ..geometry.path import PathType, ToolPath
+from .warnings_dialog import WarningsDialog
 
 # ---------------------------------------------------------------------------
 # Isometric projection
@@ -46,6 +48,30 @@ _S30 = math.sin(math.radians(30))   # ≈ 0.500
 def _proj(x: float, y: float, z: float) -> QPointF:
     """Map world (x, y, z) → Qt screen point via axonometric projection."""
     return QPointF(x + y * _C30, -(z + y * _S30))
+
+
+def _camera_transform(
+    x: float,
+    y: float,
+    z: float,
+    yaw_deg: float,
+    pitch_deg: float,
+) -> tuple[float, float, float]:
+    """Rotate a world point into camera coordinates (x, depth, z)."""
+    yaw = math.radians(yaw_deg)
+    pitch = math.radians(pitch_deg)
+
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+
+    x1 = x * cy - y * sy
+    y1 = x * sy + y * cy
+    z1 = z
+
+    x2 = x1
+    y2 = y1 * cp - z1 * sp
+    z2 = y1 * sp + z1 * cp
+    return x2, y2, z2
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +162,50 @@ def _make_grid_lines(
     return lines
 
 
+def _nice_integer_step(min_step: float) -> int:
+    """Return a human-friendly integer step >= min_step."""
+    if min_step <= 1.0:
+        return 1
+
+    magnitude = 10 ** math.floor(math.log10(min_step))
+    for factor in (1, 2, 5, 10):
+        step = factor * magnitude
+        if step >= min_step:
+            return int(step)
+    return int(10 * magnitude)
+
+
+def _axis_tick_steps(
+    start: int,
+    end: int,
+    unit_screen_px: float,
+    max_ticks: int = 20,
+) -> tuple[int, int | None]:
+    """Return major/minor integer tick steps for an axis span and screen length."""
+    span = max(end - start, 1)
+    min_major_step = max(1, math.ceil(28.0 / max(unit_screen_px, 1e-6)))
+    major_step = max(
+        _nice_integer_step(span / max(max_ticks / 2, 1)),
+        _nice_integer_step(min_major_step),
+    )
+
+    minor_step: int | None = None
+    for divisor in (5, 2):
+        if major_step % divisor != 0:
+            continue
+        candidate = major_step // divisor
+        if candidate < 1:
+            continue
+        if candidate * unit_screen_px < 12.0:
+            continue
+        tick_count = span / candidate + 1
+        if tick_count <= max_ticks:
+            minor_step = candidate
+            break
+
+    return major_step, minor_step
+
+
 # ---------------------------------------------------------------------------
 # Viewport widget (pure drawing — no labels)
 # ---------------------------------------------------------------------------
@@ -143,11 +213,23 @@ def _make_grid_lines(
 class _IsometricViewport(QWidget):
     """Renders the isometric toolpath view via QPainter."""
 
+    segment_selected = pyqtSignal(int)
+    view_orientation_changed = pyqtSignal(float, float)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumSize(160, 120)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         # No setMouseTracking — we only need move events while a button is held.
         self.setCursor(Qt.CursorShape.CrossCursor)
+
+        self._empty_logo = QPixmap()
+        assets_dir = Path(__file__).resolve().parents[2] / "assets"
+        for name in ("Liza_gray.svg", "Lisa_gray.svg"):
+            candidate = assets_dir / name
+            if candidate.exists():
+                self._empty_logo = QPixmap(str(candidate))
+                break
 
         self._segs: list[_SegGeom] = []
         self._highlighted: int | None = None
@@ -157,7 +239,9 @@ class _IsometricViewport(QWidget):
         ] = []
         self._wp_poly: QPolygonF | None = None
         self._wp_world: list[tuple[float, float, float]] = []
-        self._cut_bounds: tuple[float, float, float, float, float] | None = None
+        self._cut_bounds: tuple[float, float, float, float, float, float] | None = None
+        self._axis_overlay_lines: list[tuple[QLineF, QColor]] = []
+        self._axis_labels: list[tuple[str, QPointF, QColor]] = []
 
         # World bounding rect in projected (screen) coords before zoom/pan.
         self._world_rect = QRectF(-10.0, -30.0, 60.0, 40.0)
@@ -167,6 +251,7 @@ class _IsometricViewport(QWidget):
         self._pan = QPointF(0.0, 0.0)
         self._drag_start: QPointF | None = None
         self._pan_at_drag: QPointF | None = None
+        self._left_press_pos: QPointF | None = None
 
         # Ctrl + right mouse drag rotates the view like a 3D viewport.
         self._yaw_deg: float = 30.0
@@ -185,6 +270,31 @@ class _IsometricViewport(QWidget):
         """Pre-project all segments and reset the view."""
         self._build_geometry(toolpath)
         self.fit_view()   # also calls update()
+
+    def set_view_angles(self, yaw_deg: float, pitch_deg: float, fit: bool = False) -> None:
+        """Set the current camera orientation in degrees."""
+        self._yaw_deg = yaw_deg
+        self._pitch_deg = max(-89.0, min(89.0, pitch_deg))
+        self._reproject_geometry()
+        if fit:
+            self.fit_view()
+        else:
+            self.update()
+        self.view_orientation_changed.emit(self._yaw_deg, self._pitch_deg)
+
+    def set_standard_view(self, face: str) -> None:
+        """Switch to a standard orthographic view and fit the toolpath."""
+        orientations = {
+            "xp": (-90.0, 0.0),
+            "xn": (90.0, 0.0),
+            "yp": (180.0, 0.0),
+            "yn": (0.0, 0.0),
+            "zp": (0.0, 89.0),
+            "zn": (0.0, -89.0),
+            "iso": (30.0, 35.26438968),
+        }
+        yaw_deg, pitch_deg = orientations.get(face, orientations["iso"])
+        self.set_view_angles(yaw_deg, pitch_deg, fit=True)
 
     def set_highlight(self, line_number: int | None) -> None:
         """Change the highlighted line and trigger a repaint."""
@@ -230,6 +340,8 @@ class _IsometricViewport(QWidget):
         self.update()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
+        self.setFocus()
+
         if (
             event.button() == Qt.MouseButton.RightButton
             and (event.modifiers() & Qt.KeyboardModifier.ControlModifier)
@@ -243,10 +355,15 @@ class _IsometricViewport(QWidget):
             event.accept()
             return
 
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.MiddleButton:
             self._drag_start = event.position()
             self._pan_at_drag = QPointF(self._pan)
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._left_press_pos = QPointF(event.position())
             event.accept()
             return
 
@@ -271,6 +388,7 @@ class _IsometricViewport(QWidget):
                     self._rot_anchor_screen.y() - anchor_proj.y() * self._zoom,
                 )
             self.update()
+            self.view_orientation_changed.emit(self._yaw_deg, self._pitch_deg)
             event.accept()
             return
 
@@ -297,14 +415,35 @@ class _IsometricViewport(QWidget):
             event.accept()
             return
 
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.MiddleButton:
             self._drag_start = None
             self._pan_at_drag = None
             self.setCursor(Qt.CursorShape.CrossCursor)
             event.accept()
             return
 
+        if event.button() == Qt.MouseButton.LeftButton:
+            press_pos = self._left_press_pos
+            self._left_press_pos = None
+            if press_pos is not None:
+                delta = event.position() - press_pos
+                if delta.x() * delta.x() + delta.y() * delta.y() <= 16.0:
+                    line_number = self._pick_segment_line(event.position())
+                    if line_number is not None:
+                        self.set_highlight(line_number)
+                        self.segment_selected.emit(line_number)
+            event.accept()
+            return
+
         super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Home:
+            self.set_standard_view("iso")
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
 
     # ------------------------------------------------------------------
     # Paint
@@ -316,12 +455,23 @@ class _IsometricViewport(QWidget):
         p.fillRect(self.rect(), _BG_COLOR)
 
         if not self._segs:
-            p.setPen(_cosmetic_pen(_TEXT_HINT_COLOR, 1.0))
-            p.drawText(
-                self.rect(),
-                Qt.AlignmentFlag.AlignCenter,
-                "G-Code Laden um Vorschau zu sehen",
-            )
+            if not self._empty_logo.isNull():
+                target = self.rect().adjusted(24, 24, -24, -24)
+                logo = self._empty_logo.scaled(
+                    target.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                x = target.center().x() - logo.width() // 2
+                y = target.center().y() - logo.height() // 2
+                p.drawPixmap(x, y, logo)
+            else:
+                p.setPen(_cosmetic_pen(_TEXT_HINT_COLOR, 1.0))
+                p.drawText(
+                    self.rect(),
+                    Qt.AlignmentFlag.AlignCenter,
+                    "G-Code Laden um Vorschau zu sehen",
+                )
             p.end()
             return
 
@@ -373,6 +523,9 @@ class _IsometricViewport(QWidget):
             p.drawLines(hi)
 
         p.restore()
+
+        # Axis overlay is painted in screen space so text and tick size stay readable.
+        self._paint_axis_overlay(p)
         p.end()
 
     # ------------------------------------------------------------------
@@ -381,21 +534,7 @@ class _IsometricViewport(QWidget):
 
     def _project(self, x: float, y: float, z: float) -> QPointF:
         """Project world point using current yaw/pitch (orthographic)."""
-        yaw = math.radians(self._yaw_deg)
-        pitch = math.radians(self._pitch_deg)
-
-        cy, sy = math.cos(yaw), math.sin(yaw)
-        cp, sp = math.cos(pitch), math.sin(pitch)
-
-        # Yaw around Z axis.
-        x1 = x * cy - y * sy
-        y1 = x * sy + y * cy
-        z1 = z
-
-        # Pitch around X axis.
-        x2 = x1
-        y2 = y1 * cp - z1 * sp
-        z2 = y1 * sp + z1 * cp
+        x2, _depth, z2 = _camera_transform(x, y, z, self._yaw_deg, self._pitch_deg)
         return QPointF(x2, -z2)
 
     def _pick_world_anchor(self, screen_pos: QPointF) -> tuple[float, float, float] | None:
@@ -443,11 +582,52 @@ class _IsometricViewport(QWidget):
 
         return best_world
 
+    def _pick_segment_line(self, screen_pos: QPointF) -> int | None:
+        """Pick the nearest visible segment line within a small screen threshold."""
+        if not self._segs or self._zoom == 0.0:
+            return None
+
+        px = (screen_pos.x() - self._pan.x()) / self._zoom
+        py = (screen_pos.y() - self._pan.y()) / self._zoom
+        click = QPointF(px, py)
+
+        best_dist2 = float("inf")
+        best_line: int | None = None
+        threshold2 = (8.0 / self._zoom) ** 2
+
+        for seg in self._segs:
+            if seg.line_number is None or len(seg.points) < 2:
+                continue
+            for index in range(len(seg.points) - 1):
+                a = seg.points[index]
+                b = seg.points[index + 1]
+                dx = b.x() - a.x()
+                dy = b.y() - a.y()
+                denom = dx * dx + dy * dy
+                if denom <= 1e-12:
+                    t = 0.0
+                else:
+                    t = ((click.x() - a.x()) * dx + (click.y() - a.y()) * dy) / denom
+                    t = max(0.0, min(1.0, t))
+
+                qx = a.x() + t * dx
+                qy = a.y() + t * dy
+                dist2 = (click.x() - qx) ** 2 + (click.y() - qy) ** 2
+                if dist2 < best_dist2:
+                    best_dist2 = dist2
+                    best_line = seg.line_number
+
+        if best_dist2 <= threshold2:
+            return best_line
+        return None
+
     def _reproject_geometry(self) -> None:
         """Rebuild projected geometry from cached world-space points."""
         if not self._segs:
             self._grid_lines = []
             self._wp_poly = None
+            self._axis_overlay_lines = []
+            self._axis_labels = []
             self._world_rect = QRectF(-10.0, -30.0, 60.0, 40.0)
             return
 
@@ -522,7 +702,8 @@ class _IsometricViewport(QWidget):
             z_floor = min(cut_wz)
             wx_min, wx_max = min(cut_wx), max(cut_wx)
             wy_min, wy_max = min(cut_wy), max(cut_wy)
-            self._cut_bounds = (wx_min, wx_max, wy_min, wy_max, z_floor)
+            wz_min, wz_max = min(cut_wz), max(cut_wz)
+            self._cut_bounds = (wx_min, wx_max, wy_min, wy_max, wz_min, wz_max)
 
             self._grid_world = _make_grid_lines(wx_min, wx_max, wy_min, wy_max, z_floor)
 
@@ -537,22 +718,306 @@ class _IsometricViewport(QWidget):
         self._reproject_geometry()
 
     def _paint_axes(self, p: QPainter) -> None:
-        """Draw X / Y / Z axis arrows at the world origin."""
+        """Draw bounded X/Y/Z axes with unit tick marks from object extents."""
+        self._axis_overlay_lines = []
+        self._axis_labels = []
         if self._cut_bounds is not None:
-            wx_min, wx_max, wy_min, wy_max, z_floor = self._cut_bounds
-            arrow_len = max((wx_max - wx_min) * 0.08, (wy_max - wy_min) * 0.08, 5.0)
+            wx_min, wx_max, wy_min, wy_max, wz_min, wz_max = self._cut_bounds
         else:
-            z_floor, arrow_len = 0.0, 5.0
+            wx_min = wy_min = wz_min = 0.0
+            wx_max = wy_max = wz_max = 5.0
 
-        o = self._project(0.0, 0.0, z_floor)
-        for dx, dy, dz, pen in (
-            (arrow_len, 0.0, 0.0, _PEN_AX_X),
-            (0.0, arrow_len, 0.0, _PEN_AX_Y),
-            (0.0, 0.0, arrow_len, _PEN_AX_Z),
+        def axis_limits(min_value: float, max_value: float) -> tuple[int, int]:
+            neg_extent = abs(min(0.0, min_value))
+            pos_extent = max(0.0, max_value)
+
+            if neg_extent > pos_extent:
+                dominant_extent = max(neg_extent, 1.0)
+                pad = max(dominant_extent * 0.05, 1.0)
+                start = -math.ceil(dominant_extent + pad)
+                end = 0
+            else:
+                dominant_extent = max(pos_extent, 1.0)
+                pad = max(dominant_extent * 0.05, 1.0)
+                start = 0
+                end = math.ceil(dominant_extent + pad)
+
+            if start == end:
+                end += 1
+            return start, end
+
+        def to_screen(point: QPointF) -> QPointF:
+            return QPointF(
+                point.x() * self._zoom + self._pan.x(),
+                point.y() * self._zoom + self._pan.y(),
+            )
+
+        if self._cut_bounds is not None:
+            center_world = (
+                (wx_min + wx_max) * 0.5,
+                (wy_min + wy_max) * 0.5,
+                (wz_min + wz_max) * 0.5,
+            )
+        else:
+            center_world = (0.0, 0.0, 0.0)
+        object_center_screen = to_screen(self._project(*center_world))
+
+        def choose_label_position(
+            base: QPointF,
+            perp_dx: float,
+            perp_dy: float,
+            distance: float,
+            forward_dx: float = 0.0,
+            forward_dy: float = 0.0,
+        ) -> QPointF:
+            margin = 12.0
+            candidates = [
+                QPointF(
+                    base.x() + forward_dx + perp_dx * distance,
+                    base.y() + forward_dy + perp_dy * distance,
+                ),
+                QPointF(
+                    base.x() + forward_dx - perp_dx * distance,
+                    base.y() + forward_dy - perp_dy * distance,
+                ),
+            ]
+
+            def score(point: QPointF) -> tuple[int, float]:
+                inside = (
+                    margin <= point.x() <= self.width() - margin
+                    and margin <= point.y() <= self.height() - margin
+                )
+                dist_to_object = math.hypot(
+                    point.x() - object_center_screen.x(),
+                    point.y() - object_center_screen.y(),
+                )
+                return (1 if inside else 0, dist_to_object)
+
+            return max(candidates, key=score)
+
+        for label, start, end, pen, color, point_on_axis, unit_point in (
+            (
+                "X",
+                *axis_limits(wx_min, wx_max),
+                _PEN_AX_X,
+                _AX_X_COLOR,
+                lambda value: (value, 0.0, 0.0),
+                (1.0, 0.0, 0.0),
+            ),
+            (
+                "Y",
+                *axis_limits(wy_min, wy_max),
+                _PEN_AX_Y,
+                _AX_Y_COLOR,
+                lambda value: (0.0, value, 0.0),
+                (0.0, 1.0, 0.0),
+            ),
+            (
+                "Z",
+                *axis_limits(wz_min, wz_max),
+                _PEN_AX_Z,
+                _AX_Z_COLOR,
+                lambda value: (0.0, 0.0, value),
+                (0.0, 0.0, 1.0),
+            ),
         ):
-            e = self._project(dx, dy, dz + z_floor)
+            start_point = self._project(*point_on_axis(start))
+            end_point = self._project(*point_on_axis(end))
             p.setPen(pen)
-            p.drawLine(o, e)
+            p.drawLine(start_point, end_point)
+
+            unit_origin = self._project(0.0, 0.0, 0.0)
+            unit_step = self._project(*unit_point)
+            dir_x = (unit_step.x() - unit_origin.x()) * self._zoom
+            dir_y = (unit_step.y() - unit_origin.y()) * self._zoom
+            dir_len = math.hypot(dir_x, dir_y) or 1.0
+            perp_x = -dir_y / dir_len
+            perp_y = dir_x / dir_len
+            major_tick_half = 4.0
+            minor_tick_half = 2.5
+            label_offset = 10.0
+
+            major_step, minor_step = _axis_tick_steps(start, end, dir_len)
+            tick_values = range(start, end + 1, minor_step or major_step)
+
+            for value in tick_values:
+                is_major = (value % major_step) == 0
+                tick_half = major_tick_half if is_major else minor_tick_half
+                tick_proj = self._project(*point_on_axis(float(value)))
+                tick_screen = to_screen(tick_proj)
+                tick_line = QLineF(
+                    QPointF(
+                        tick_screen.x() - perp_x * tick_half,
+                        tick_screen.y() - perp_y * tick_half,
+                    ),
+                    QPointF(
+                        tick_screen.x() + perp_x * tick_half,
+                        tick_screen.y() + perp_y * tick_half,
+                    ),
+                )
+                self._axis_overlay_lines.append((tick_line, color))
+
+                if is_major and value != 0:
+                    self._axis_labels.append((
+                        str(value),
+                        choose_label_position(
+                            tick_screen,
+                            perp_x,
+                            perp_y,
+                            major_tick_half + label_offset,
+                        ),
+                        color,
+                    ))
+
+            end_screen = to_screen(end_point)
+            self._axis_labels.append((
+                label,
+                choose_label_position(
+                    end_screen,
+                    perp_x,
+                    perp_y,
+                    12.0,
+                    dir_x / dir_len * 10.0,
+                    dir_y / dir_len * 10.0,
+                ),
+                color,
+            ))
+
+    def _paint_axis_overlay(self, p: QPainter) -> None:
+        """Paint axis tick marks and labels in viewport pixel coordinates."""
+        if not self._axis_overlay_lines and not self._axis_labels:
+            return
+
+        for line, color in self._axis_overlay_lines:
+            p.setPen(_cosmetic_pen(color, 1.0))
+            p.drawLine(line)
+
+        for label, world_pt, color in self._axis_labels:
+            fm = p.fontMetrics()
+            text_rect = fm.boundingRect(label)
+            draw_rect = QRectF(
+                world_pt.x() - text_rect.width() / 2.0,
+                world_pt.y() - text_rect.height() / 2.0,
+                text_rect.width() + 2.0,
+                text_rect.height() + 2.0,
+            )
+            p.fillRect(draw_rect.adjusted(-1.0, -1.0, 1.0, 1.0), QColor(245, 245, 245, 220))
+            p.setPen(_cosmetic_pen(color, 1.0))
+            p.drawText(draw_rect, Qt.AlignmentFlag.AlignCenter, label)
+
+
+class _ViewCubeWidget(QWidget):
+    """Clickable mini view cube for switching to standard orthographic views."""
+
+    face_selected = pyqtSignal(str)
+
+    _FACE_COLORS = {
+        "xp": QColor("#f2f2f2"),
+        "xn": QColor("#dcdcdc"),
+        "yp": QColor("#ededed"),
+        "yn": QColor("#d7d7d7"),
+        "zp": QColor("#ffffff"),
+        "zn": QColor("#cfcfcf"),
+    }
+    _FACE_LABELS = {
+        "xp": ("X", _AX_X_COLOR),
+        "xn": ("X", _AX_X_COLOR),
+        "yp": ("Y", _AX_Y_COLOR),
+        "yn": ("Y", _AX_Y_COLOR),
+        "zp": ("Z", _AX_Z_COLOR),
+        "zn": ("Z", _AX_Z_COLOR),
+    }
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(72, 72)
+        self.setToolTip("Ansichtswuerfel: Flaeche klicken fuer Standardansicht")
+        self._yaw_deg = 30.0
+        self._pitch_deg = 35.26438968
+        self._face_polygons: list[tuple[str, QPolygonF]] = []
+
+    def set_orientation(self, yaw_deg: float, pitch_deg: float) -> None:
+        """Update the cube to reflect the current viewport orientation."""
+        self._yaw_deg = yaw_deg
+        self._pitch_deg = pitch_deg
+        self.update()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        for face, polygon in reversed(self._face_polygons):
+            if polygon.containsPoint(event.position(), Qt.FillRule.WindingFill):
+                self.face_selected.emit(face)
+                event.accept()
+                return
+
+        self.face_selected.emit("iso")
+        event.accept()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor("#2F3645"))
+
+        self._face_polygons = []
+        center = QPointF(self.width() / 2.0, self.height() / 2.0 - 6.0)
+        scale = 18.0
+
+        vertices = {
+            "lbf": (-1.0, -1.0, -1.0),
+            "lbn": (-1.0, -1.0, 1.0),
+            "ltf": (-1.0, 1.0, -1.0),
+            "ltn": (-1.0, 1.0, 1.0),
+            "rbf": (1.0, -1.0, -1.0),
+            "rbn": (1.0, -1.0, 1.0),
+            "rtf": (1.0, 1.0, -1.0),
+            "rtn": (1.0, 1.0, 1.0),
+        }
+        projected: dict[str, QPointF] = {}
+        for key, coords in vertices.items():
+            x2, _depth, z2 = _camera_transform(*coords, self._yaw_deg, self._pitch_deg)
+            projected[key] = QPointF(center.x() + x2 * scale, center.y() - z2 * scale)
+
+        faces = [
+            ("xp", ["rbf", "rtf", "rtn", "rbn"], (1.0, 0.0, 0.0)),
+            ("xn", ["lbf", "lbn", "ltn", "ltf"], (-1.0, 0.0, 0.0)),
+            ("yp", ["ltf", "ltn", "rtn", "rtf"], (0.0, 1.0, 0.0)),
+            ("yn", ["lbf", "rbf", "rbn", "lbn"], (0.0, -1.0, 0.0)),
+            ("zp", ["lbn", "rbn", "rtn", "ltn"], (0.0, 0.0, 1.0)),
+            ("zn", ["lbf", "ltf", "rtf", "rbf"], (0.0, 0.0, -1.0)),
+        ]
+
+        visible_faces: list[tuple[float, str, QPolygonF]] = []
+        for face, keys, normal in faces:
+            nx, depth, nz = _camera_transform(*normal, self._yaw_deg, self._pitch_deg)
+            if depth >= 0.0:
+                continue
+            polygon = QPolygonF([projected[key] for key in keys])
+            depth_sum = 0.0
+            for key in keys:
+                _px, py, _pz = _camera_transform(*vertices[key], self._yaw_deg, self._pitch_deg)
+                depth_sum += py
+            visible_faces.append((depth_sum / len(keys), face, polygon))
+
+        visible_faces.sort(key=lambda item: item[0])
+        for _depth, face, polygon in visible_faces:
+            painter.setPen(QPen(QColor("#495062"), 1.2))
+            painter.setBrush(QBrush(self._FACE_COLORS[face]))
+            painter.drawPolygon(polygon)
+            label, color = self._FACE_LABELS[face]
+            painter.setPen(color)
+            font = painter.font()
+            font.setBold(True)
+            font.setPointSize(10)
+            painter.setFont(font)
+            painter.drawText(polygon.boundingRect(), Qt.AlignmentFlag.AlignCenter, label)
+            self._face_polygons.append((face, polygon))
+
+        painter.setPen(QColor("#c8d0df"))
+        painter.drawText(
+            QRectF(0.0, self.height() - 18.0, self.width(), 14.0),
+            Qt.AlignmentFlag.AlignCenter,
+            "3D",
+        )
+        painter.end()
 
 
 # ---------------------------------------------------------------------------
@@ -572,43 +1037,38 @@ class CanvasPanel(QWidget):
     """
 
     segment_selected = pyqtSignal(int)
+    warning_selected = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._language = "de"
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        self._warnings: list[AnalysisWarning] = []
+        self._warnings_dialog: WarningsDialog | None = None
 
-        # --- toolbar row with Fit button ---
+        # --- toolbar row with view cube ---
         toolbar = QWidget()
         tb = QHBoxLayout(toolbar)
         tb.setContentsMargins(4, 2, 4, 2)
         tb.setSpacing(4)
-        self._fit_btn = QPushButton("⊞ Fit")
-        self._fit_btn.setToolTip("Zoom Zurücksetzen / Alles anzeigen")
-        self._fit_btn.setFixedHeight(24)
-        self._fit_btn.clicked.connect(self._on_fit)
-        tb.addWidget(self._fit_btn)
+        self._view_cube = _ViewCubeWidget()
+        tb.addWidget(self._view_cube)
         tb.addStretch(1)
         layout.addWidget(toolbar)
 
         # --- drawing viewport ---
         self._viewport = _IsometricViewport()
+        self._viewport.segment_selected.connect(self.segment_selected)
+        self._viewport.view_orientation_changed.connect(self._view_cube.set_orientation)
+        self._view_cube.face_selected.connect(self._viewport.set_standard_view)
         layout.addWidget(self._viewport, stretch=1)
 
-        # --- warning label ---
-        self._warning_label = QLabel("")
-        self._warning_label.setAlignment(
-            Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft
-        )
-        self._warning_label.setWordWrap(True)
-        self._warning_label.setStyleSheet(
-            "color: #CC6600; font-size: 11px; padding: 4px;"
-        )
-        layout.addWidget(self._warning_label, stretch=0)
+        self.set_language(self._language)
 
         # --- dimensions label ---
         self._dims_label = QLabel("")
@@ -634,25 +1094,38 @@ class CanvasPanel(QWidget):
         self._viewport.set_highlight(line_number)
 
     def show_warnings(self, warnings: list[AnalysisWarning]) -> None:
-        """Display analysis warnings below the canvas."""
-        if not warnings:
-            self._warning_label.setText("")
-            self._warning_label.hide()
+        """Store analysis warnings and update floating dialog contents."""
+        self._warnings = warnings
+        if not self._warnings:
+            if self._warnings_dialog is not None:
+                self._warnings_dialog.set_warnings([])
+                self._warnings_dialog.close()
             return
-        lines: list[str] = []
-        for w in warnings:
-            icon = _SEVERITY_ICON[w.severity]
-            loc = f" (line {w.line_number})" if w.line_number is not None else ""
-            lines.append(f"{icon} {w.message}{loc}")
-        self._warning_label.setText("\n".join(lines))
-        self._warning_label.show()
+        if self._warnings_dialog is not None:
+            self._warnings_dialog.set_warnings(self._warnings)
+
+    def set_language(self, language: str) -> None:
+        """Set UI language for panel labels."""
+        self._language = language
+        if self._warnings_dialog is not None:
+            self._warnings_dialog.set_language(self._language)
+
+    def show_warning_dialog(self) -> None:
+        """Show floating warnings dialog and keep it in sync."""
+        if not self._warnings:
+            return
+        if self._warnings_dialog is None:
+            self._warnings_dialog = WarningsDialog(parent=self, language=self._language)
+            self._warnings_dialog.line_selected.connect(self.warning_selected)
+        self._warnings_dialog.set_language(self._language)
+        self._warnings_dialog.set_warnings(self._warnings)
+        self._warnings_dialog.show()
+        self._warnings_dialog.raise_()
+        self._warnings_dialog.activateWindow()
 
     # ------------------------------------------------------------------
     # Private
     # ------------------------------------------------------------------
-
-    def _on_fit(self) -> None:
-        self._viewport.fit_view()
 
     def _update_dims_label(self, toolpath: ToolPath | None) -> None:
         """Show workpiece dimensions (G1/G2/G3 only) in the dims label."""
@@ -678,7 +1151,12 @@ class CanvasPanel(QWidget):
         w = max(xs) - min(xs)
         h = max(ys) - min(ys)
         d = max(zs) - min(zs)
-        self._dims_label.setText(
-            f"Werkstück  ·  X: {w:.2f} mm   Y: {h:.2f} mm   Z: {d:.2f} mm"
-        )
+        if self._language == "de":
+            self._dims_label.setText(
+                f"Werkstueck  -  X: {w:.2f} mm   Y: {h:.2f} mm   Z: {d:.2f} mm"
+            )
+        else:
+            self._dims_label.setText(
+                f"Workpiece  -  X: {w:.2f} mm   Y: {h:.2f} mm   Z: {d:.2f} mm"
+            )
         self._dims_label.show()

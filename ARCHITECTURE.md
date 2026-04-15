@@ -1,4 +1,4 @@
-# GRBL Visualizer — Architecture
+# GCode Lisa — Architecture
 
 ## Module Organization
 

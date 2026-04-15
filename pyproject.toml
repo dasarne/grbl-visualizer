@@ -3,9 +3,9 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "grbl-visualizer"
+name = "gcode-lisa"
 version = "0.1.0"
-description = "GRBL G-Code Visualizer & Analyzer for CNC Machines"
+description = "GCode Lisa - Cut with confidence. Waste less."
 authors = [{ name = "dasarne" }]
 license = { text = "GPL-3.0" }
 requires-python = ">=3.10"

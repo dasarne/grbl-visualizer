@@ -35,6 +35,21 @@ pytest tests/test_parser.py -v
 pytest tests/ --cov=src --cov-report=xml
 ```
 
+## Local Linux Integration
+
+Register desktop launcher and file associations (`*.gcode`, `*.nc`):
+
+```bash
+chmod +x scripts/install_linux.sh scripts/uninstall_linux.sh
+./scripts/install_linux.sh
+```
+
+Undo integration:
+
+```bash
+./scripts/uninstall_linux.sh
+```
+
 ## Development Workflow
 
 1. Pick an issue from the GitHub issue tracker

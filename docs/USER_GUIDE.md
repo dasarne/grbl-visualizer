@@ -1,4 +1,10 @@
-# GRBL Visualizer — User Guide
+# GCode Lisa — User Guide
+
+![GCode Lisa](../assets/Lisa.svg)
+
+> Cut with confidence.
+>
+> Waste less.
 
 ## Loading a File
 

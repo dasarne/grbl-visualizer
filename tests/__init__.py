@@ -1,1 +1,1 @@
-"""Test suite for GRBL Visualizer."""
+"""Test suite for GCode Lisa."""

@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for the GRBL Visualizer test suite."""
+"""Shared pytest fixtures for the GCode Lisa test suite."""
 
 import pytest
 

@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in GRBL Visualizer
+about: Report a bug in GCode Lisa
 labels: bug
 ---
 
@@ -27,4 +27,4 @@ If applicable, add screenshots.
 - OS: [e.g. Ubuntu 22.04 / KDE]
 - Python version: [e.g. 3.11]
 - GRBL version in use: [e.g. 1.1H]
-- GRBL Visualizer version: [e.g. 0.1.0]
+- GCode Lisa version: [e.g. 0.1.0]

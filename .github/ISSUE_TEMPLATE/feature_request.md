@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest a new feature for GRBL Visualizer
+about: Suggest a new feature for GCode Lisa
 labels: enhancement
 ---
 

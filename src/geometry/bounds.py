@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum, auto
 
+from .path import PathType, build_toolpath
+
 # Commands that perform actual work inside the material and carry X/Y/Z coordinates.
 # G0 (rapid positioning) moves the tool outside the workpiece and must not
 # contribute to the workpiece bounding box.  G38.x probing moves are likewise
@@ -65,25 +67,47 @@ _ALL_MOTION_COMMANDS = frozenset({
 
 
 def calculate_bounds(program) -> BoundingBox | None:
-    """Calculate the axis-aligned bounding box of all *work* motion coordinates.
+    """Calculate workpiece bounds from simulated cut segments (G1/G2/G3).
 
-    Only G1/G2/G3 lines are considered.  G0 rapid-positioning moves travel
-    outside the workpiece and must not influence the reported dimensions.
-    Returns None when the program contains no work-motion coordinates at all.
+    We derive coordinates from :func:`build_toolpath` so modal axis behaviour
+    and arcs are respected, but we intentionally *exclude* rapid-entry start
+    points: when a cut begins immediately after G0, only the cut endpoint(s)
+    contribute.  This avoids inflating the workpiece bounds by travel moves
+    while still preserving continuity across connected cut segments.
     """
     xs: list[float] = []
     ys: list[float] = []
     zs: list[float] = []
 
-    for line in program.lines:
-        if line.command not in _WORK_COMMANDS:
+    toolpath = build_toolpath(program)
+    work_types = {PathType.CUT, PathType.ARC_CW, PathType.ARC_CCW}
+
+    prev_work = False
+    for seg in toolpath.segments:
+        if seg.type not in work_types:
+            prev_work = False
             continue
-        if 'X' in line.parameters:
-            xs.append(line.parameters['X'])
-        if 'Y' in line.parameters:
-            ys.append(line.parameters['Y'])
-        if 'Z' in line.parameters:
-            zs.append(line.parameters['Z'])
+
+        if seg.arc_points:
+            points = seg.arc_points
+            if not prev_work and len(points) > 1:
+                points = points[1:]
+            for x, y, z in points:
+                xs.append(x)
+                ys.append(y)
+                zs.append(z)
+            prev_work = True
+            continue
+
+        if prev_work:
+            xs.append(seg.start_x)
+            ys.append(seg.start_y)
+            zs.append(seg.start_z)
+
+        xs.append(seg.end_x)
+        ys.append(seg.end_y)
+        zs.append(seg.end_z)
+        prev_work = True
 
     if not xs and not ys and not zs:
         return None

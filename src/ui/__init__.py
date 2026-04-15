@@ -1,1 +1,1 @@
-"""PyQt6-based user interface for GRBL Visualizer."""
+"""PyQt6-based user interface for GCode Lisa."""
