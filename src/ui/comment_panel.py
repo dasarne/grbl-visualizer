@@ -101,8 +101,12 @@ class CommentPanel(QWidget):
         self._comments = list(comments)
         self._refresh_items()
 
-    def set_current_line(self, line_number: int) -> None:
-        """Highlight the current line, inserting a temporary gap marker if needed."""
+    def set_current_line(self, line_number: int | None) -> None:
+        """Highlight the current line, inserting a temporary gap marker if needed.
+
+        Pass ``None`` to clear the selection and hide the marker (e.g. when
+        multiple non-contiguous canvas segments are selected).
+        """
         self._current_line = line_number
         self._refresh_items()
 

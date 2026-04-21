@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence
+from .resources import get_strings
 
 
 class FindReplaceDialog(QDialog):
@@ -128,33 +129,23 @@ class FindReplaceDialog(QDialog):
         self._language = language
         self._apply_language()
 
-    def _get_strings(self) -> dict:
-        """Get language strings."""
-        de = {
-            "title": "Suchen und Ersetzen",
-            "find_label": "Suchen:",
-            "find_prev": "Vorherige",
-            "find_next": "Naechste",
-            "regex": "Regulaerer Ausdruck",
-            "replace_label": "Ersetzen:",
-            "replace_prev": "Vorherige ersetzen",
-            "replace_next": "Naechste ersetzen",
-            "replace_all": "Alles ersetzen",
-            "in_selection": "In Auswahl",
+    def _get_strings(self) -> dict[str, str]:
+        """Get language strings from shared resources."""
+        s = get_strings(self._language)
+        return {
+            "title": s["find.title"],
+            "find_label": s["find.find_label"],
+            "find_prev": s["find.find_prev"],
+            "find_next": s["find.find_next"],
+            "regex": s["find.regex"],
+            "replace_label": s["find.replace_label"],
+            "replace_prev": s["find.replace_prev"],
+            "replace_next": s["find.replace_next"],
+            "replace_all": s["find.replace_all"],
+            "in_selection": s["find.in_selection"],
+            "status.empty_search": s["find.status.empty_search"],
+            "status.regex_error": s["find.status.regex_error"],
         }
-        en = {
-            "title": "Find and Replace",
-            "find_label": "Find:",
-            "find_prev": "Previous",
-            "find_next": "Next",
-            "regex": "Regular Expression",
-            "replace_label": "Replace:",
-            "replace_prev": "Replace Previous",
-            "replace_next": "Replace Next",
-            "replace_all": "Replace All",
-            "in_selection": "In Selection",
-        }
-        return de if self._language == "de" else en
 
     def _on_find_text_changed(self) -> None:
         """Clear status when find text changes."""
@@ -167,7 +158,7 @@ class FindReplaceDialog(QDialog):
     def _on_find_next(self) -> None:
         term = self._find_input.text()
         if not term:
-            self._status_label.setText("Empty search term")
+            self._status_label.setText(self._get_strings()["status.empty_search"])
             return
         use_regex = self._regex_check.isChecked()
         search_in_selection = self._selection_check.isChecked()
@@ -178,7 +169,7 @@ class FindReplaceDialog(QDialog):
     def _on_find_previous(self) -> None:
         term = self._find_input.text()
         if not term:
-            self._status_label.setText("Empty search term")
+            self._status_label.setText(self._get_strings()["status.empty_search"])
             return
         use_regex = self._regex_check.isChecked()
         search_in_selection = self._selection_check.isChecked()
@@ -190,7 +181,7 @@ class FindReplaceDialog(QDialog):
         term = self._find_input.text()
         replacement = self._replace_input.text()
         if not term:
-            self._status_label.setText("Empty search term")
+            self._status_label.setText(self._get_strings()["status.empty_search"])
             return
         use_regex = self._regex_check.isChecked()
         search_in_selection = self._selection_check.isChecked()
@@ -202,7 +193,7 @@ class FindReplaceDialog(QDialog):
         term = self._find_input.text()
         replacement = self._replace_input.text()
         if not term:
-            self._status_label.setText("Empty search term")
+            self._status_label.setText(self._get_strings()["status.empty_search"])
             return
         use_regex = self._regex_check.isChecked()
         search_in_selection = self._selection_check.isChecked()
@@ -214,7 +205,7 @@ class FindReplaceDialog(QDialog):
         term = self._find_input.text()
         replacement = self._replace_input.text()
         if not term:
-            self._status_label.setText("Empty search term")
+            self._status_label.setText(self._get_strings()["status.empty_search"])
             return
         use_regex = self._regex_check.isChecked()
         search_in_selection = self._selection_check.isChecked()
@@ -228,7 +219,9 @@ class FindReplaceDialog(QDialog):
             re.compile(pattern)
             return True
         except re.error as e:
-            self._status_label.setText(f"Regex error: {str(e)}")
+            self._status_label.setText(
+                self._get_strings()["status.regex_error"].format(error=str(e))
+            )
             return False
 
     def set_status(self, message: str) -> None:

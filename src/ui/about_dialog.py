@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtGui import QDesktopServices, QPixmap
+from .resources import get_strings
 from PyQt6.QtWidgets import (
 	QDialog,
 	QDialogButtonBox,
@@ -107,70 +108,20 @@ class AboutDialog(QDialog):
 		return w
 
 	def _tr_map(self) -> dict[str, str]:
-		de = {
-			"title": "Info GCode Lisa",
-			"tab.info": "Info",
-			"tab.contributors": "Mitwirkende",
-			"tab.license": "Lizenz",
-			"tab.libraries": "Bibliotheken",
-			"tab.privacy": "Datenschutz",
-			"label.version": "Version",
-			"label.python": "Python",
-			"label.qt": "Qt",
-			"label.license": "Lizenz",
-			"contributors.text": (
-				"GCode Lisa wird als fokussiertes G-Code-Werkzeug fuer CNC entwickelt.\n\n"
-				"Entwicklung: Arne von Irmer und ChatGPT.\n"
-				"Das Projekt lebt im oeffentlichen Repository unter github.com/dasarne/grbl-visualizer.\n"
-				"Beitraege sind willkommen."
-			),
-			"license.text": (
-				"GCode Lisa wird unter der GPL-3.0-Lizenz veroeffentlicht.\n\n"
-				"Die vollstaendige Lizenz steht in der Datei LICENSE im Repository."
-			),
-			"libraries.text": (
-				"Verwendete Kernbibliotheken:\n"
-				"- PyQt6\n"
-				"- pytest\n"
-				"- numpy (optional)\n"
-				"- matplotlib (optional, legacy)"
-			),
-			"privacy.text": (
-				"GCode Lisa ist eine lokale Desktop-Anwendung und uebertraegt keine G-Code-Dateien an Cloud-Dienste.\n\n"
-				"Dateiverlauf und Einstellungen werden lokal gespeichert."
-			),
+		s = get_strings(self._language)
+		return {
+			"title": s["about.title"],
+			"tab.info": s["about.tab.info"],
+			"tab.contributors": s["about.tab.contributors"],
+			"tab.license": s["about.tab.license"],
+			"tab.libraries": s["about.tab.libraries"],
+			"tab.privacy": s["about.tab.privacy"],
+			"label.version": s["about.label.version"],
+			"label.python": s["about.label.python"],
+			"label.qt": s["about.label.qt"],
+			"label.license": s["about.label.license"],
+			"contributors.text": s["about.contributors.text"],
+			"license.text": s["about.license.text"],
+			"libraries.text": s["about.libraries.text"],
+			"privacy.text": s["about.privacy.text"],
 		}
-		en = {
-			"title": "About GCode Lisa",
-			"tab.info": "Info",
-			"tab.contributors": "Contributors",
-			"tab.license": "License",
-			"tab.libraries": "Libraries",
-			"tab.privacy": "Privacy",
-			"label.version": "Version",
-			"label.python": "Python",
-			"label.qt": "Qt",
-			"label.license": "License",
-			"contributors.text": (
-				"GCode Lisa is developed as a focused G-Code tool for CNC workflows.\n\n"
-				"Development: Arne von Irmer and ChatGPT.\n"
-				"The project lives in the public repository github.com/dasarne/grbl-visualizer.\n"
-				"Contributions are welcome."
-			),
-			"license.text": (
-				"GCode Lisa is released under GPL-3.0.\n\n"
-				"See the LICENSE file in the repository root for details."
-			),
-			"libraries.text": (
-				"Core libraries in use:\n"
-				"- PyQt6\n"
-				"- pytest\n"
-				"- numpy (optional)\n"
-				"- matplotlib (optional, legacy)"
-			),
-			"privacy.text": (
-				"GCode Lisa is a local desktop application and does not upload G-Code files to cloud services.\n\n"
-				"Recent files and settings are stored locally."
-			),
-		}
-		return de if self._language == "de" else en

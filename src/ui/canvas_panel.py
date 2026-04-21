@@ -26,7 +26,7 @@ import math
 from pathlib import Path
 from dataclasses import dataclass
 
-from PyQt6.QtCore import Qt, QLineF, QPointF, QRectF, pyqtSignal
+from PyQt6.QtCore import Qt, QLineF, QPointF, QRectF, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QBrush, QColor, QMouseEvent, QPaintEvent, QPainter, QPen,
     QPolygonF, QResizeEvent, QWheelEvent, QPixmap,
@@ -113,6 +113,139 @@ _PEN_HIGHLIGHT = _cosmetic_pen(_HIGHLIGHT_COLOR, 2.5)
 _PEN_AX_X = _cosmetic_pen(_AX_X_COLOR, 1.5)
 _PEN_AX_Y = _cosmetic_pen(_AX_Y_COLOR, 1.5)
 _PEN_AX_Z = _cosmetic_pen(_AX_Z_COLOR, 1.5)
+
+NAV_STYLE_CAD = "cad"
+NAV_STYLE_BLENDER = "blender"
+NAV_STYLE_GESTURE = "gesture"
+NAV_STYLE_MAYA_GESTURE = "maya_gesture"
+NAV_STYLE_OPEN_CASCADE = "open_cascade"
+NAV_STYLE_OPEN_INVENTOR = "open_inventor"
+NAV_STYLE_OPEN_SCAD = "open_scad"
+NAV_STYLE_REVIT = "revit"
+NAV_STYLE_SIEMENS_NX = "siemens_nx"
+NAV_STYLE_SOLIDWORKS = "solidworks"
+NAV_STYLE_TINKERCAD = "tinkercad"
+NAV_STYLE_TOUCHPAD = "touchpad"
+NAV_STYLE_LEGACY = "legacy"
+SUPPORTED_NAV_STYLES = (
+    NAV_STYLE_CAD,
+    NAV_STYLE_BLENDER,
+    NAV_STYLE_GESTURE,
+    NAV_STYLE_MAYA_GESTURE,
+    NAV_STYLE_OPEN_CASCADE,
+    NAV_STYLE_OPEN_INVENTOR,
+    NAV_STYLE_OPEN_SCAD,
+    NAV_STYLE_REVIT,
+    NAV_STYLE_SIEMENS_NX,
+    NAV_STYLE_SOLIDWORKS,
+    NAV_STYLE_TINKERCAD,
+    NAV_STYLE_TOUCHPAD,
+    NAV_STYLE_LEGACY,
+)
+
+
+@dataclass(frozen=True)
+class _MouseBinding:
+    button: Qt.MouseButton
+    modifiers: Qt.KeyboardModifier = Qt.KeyboardModifier.NoModifier
+
+
+_MOD_MASK = (
+    Qt.KeyboardModifier.ShiftModifier
+    | Qt.KeyboardModifier.ControlModifier
+    | Qt.KeyboardModifier.AltModifier
+)
+
+
+def _binding_matches(event: QMouseEvent, binding: _MouseBinding) -> bool:
+    if event.button() != binding.button:
+        return False
+    mods = event.modifiers() & _MOD_MASK
+    return mods == binding.modifiers
+
+
+_STYLE_BINDINGS: dict[str, dict[str, tuple[_MouseBinding, ...]]] = {
+    # FreeCAD CAD model (default)
+    NAV_STYLE_CAD: {
+        "rotate": (
+            _MouseBinding(Qt.MouseButton.MiddleButton),
+            _MouseBinding(Qt.MouseButton.RightButton, Qt.KeyboardModifier.ShiftModifier),
+        ),
+        "pan": (
+            _MouseBinding(Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.ShiftModifier),
+            _MouseBinding(Qt.MouseButton.RightButton, Qt.KeyboardModifier.ControlModifier),
+        ),
+    },
+    # Blender-like controls
+    NAV_STYLE_BLENDER: {
+        "rotate": (_MouseBinding(Qt.MouseButton.MiddleButton),),
+        "pan": (_MouseBinding(Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.ShiftModifier),),
+    },
+    # Gesture style
+    NAV_STYLE_GESTURE: {
+        "rotate": (
+            _MouseBinding(Qt.MouseButton.RightButton),
+            _MouseBinding(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.AltModifier),
+        ),
+        "pan": (_MouseBinding(Qt.MouseButton.MiddleButton),),
+    },
+    # MayaGesture style
+    NAV_STYLE_MAYA_GESTURE: {
+        "rotate": (_MouseBinding(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.AltModifier),),
+        "pan": (_MouseBinding(Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.AltModifier),),
+    },
+    # OpenCascade style
+    NAV_STYLE_OPEN_CASCADE: {
+        "rotate": (_MouseBinding(Qt.MouseButton.MiddleButton),),
+        "pan": (_MouseBinding(Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.ControlModifier),),
+    },
+    # OpenInventor style
+    NAV_STYLE_OPEN_INVENTOR: {
+        "rotate": (_MouseBinding(Qt.MouseButton.MiddleButton),),
+        "pan": (_MouseBinding(Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.ShiftModifier),),
+    },
+    # OpenSCAD style
+    NAV_STYLE_OPEN_SCAD: {
+        "rotate": (
+            _MouseBinding(Qt.MouseButton.RightButton),
+            _MouseBinding(Qt.MouseButton.RightButton, Qt.KeyboardModifier.ControlModifier),
+        ),
+        "pan": (_MouseBinding(Qt.MouseButton.MiddleButton),),
+    },
+    # Revit style
+    NAV_STYLE_REVIT: {
+        "rotate": (_MouseBinding(Qt.MouseButton.MiddleButton),),
+        "pan": (_MouseBinding(Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.ShiftModifier),),
+    },
+    # Siemens NX style
+    NAV_STYLE_SIEMENS_NX: {
+        "rotate": (_MouseBinding(Qt.MouseButton.MiddleButton),),
+        "pan": (
+            _MouseBinding(Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.ControlModifier),
+            _MouseBinding(Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.ShiftModifier),
+        ),
+    },
+    # SolidWorks style
+    NAV_STYLE_SOLIDWORKS: {
+        "rotate": (_MouseBinding(Qt.MouseButton.MiddleButton),),
+        "pan": (_MouseBinding(Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.ControlModifier),),
+    },
+    # TinkerCAD style
+    NAV_STYLE_TINKERCAD: {
+        "rotate": (_MouseBinding(Qt.MouseButton.RightButton),),
+        "pan": (_MouseBinding(Qt.MouseButton.MiddleButton),),
+    },
+    # Touchpad fallback mapping for mouse usage.
+    NAV_STYLE_TOUCHPAD: {
+        "rotate": (_MouseBinding(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.AltModifier),),
+        "pan": (_MouseBinding(Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier),),
+    },
+    # Backward-compatibility with previous behavior
+    NAV_STYLE_LEGACY: {
+        "rotate": (_MouseBinding(Qt.MouseButton.RightButton, Qt.KeyboardModifier.ControlModifier),),
+        "pan": (_MouseBinding(Qt.MouseButton.MiddleButton),),
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +347,7 @@ class _IsometricViewport(QWidget):
     """Renders the isometric toolpath view via QPainter."""
 
     segment_selected = pyqtSignal(int)
+    segments_selected = pyqtSignal(list)   # list[int] – multi-selection (lasso / Shift)
     view_orientation_changed = pyqtSignal(float, float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -232,8 +366,15 @@ class _IsometricViewport(QWidget):
                 break
 
         self._segs: list[_SegGeom] = []
-        self._highlighted: int | None = None
+        self._highlighted: frozenset[int] = frozenset()
         self._grid_lines: list[QLineF] = []
+
+        # Animation state (fade between base colour and red).
+        self._anim_phase: float = 0.0
+        self._anim_dir: float = 1.0
+        self._anim_timer = QTimer(self)
+        self._anim_timer.setInterval(16)   # ≈60 fps
+        self._anim_timer.timeout.connect(self._on_anim_tick)
         self._grid_world: list[
             tuple[tuple[float, float, float], tuple[float, float, float]]
         ] = []
@@ -252,6 +393,11 @@ class _IsometricViewport(QWidget):
         self._drag_start: QPointF | None = None
         self._pan_at_drag: QPointF | None = None
         self._left_press_pos: QPointF | None = None
+        self._nav_style: str = NAV_STYLE_CAD
+
+        # Lasso state.
+        self._in_lasso: bool = False
+        self._lasso_current: QPointF | None = None
 
         # Ctrl + right mouse drag rotates the view like a 3D viewport.
         self._yaw_deg: float = 30.0
@@ -261,6 +407,8 @@ class _IsometricViewport(QWidget):
         self._pitch_at_drag: float | None = None
         self._rot_anchor_world: tuple[float, float, float] | None = None
         self._rot_anchor_screen: QPointF | None = None
+        self._rot_button: Qt.MouseButton | None = None
+        self._pan_button: Qt.MouseButton | None = None
 
     # ------------------------------------------------------------------
     # Public
@@ -268,6 +416,9 @@ class _IsometricViewport(QWidget):
 
     def load_toolpath(self, toolpath: ToolPath) -> None:
         """Pre-project all segments and reset the view."""
+        self._highlighted = frozenset()
+        self._anim_timer.stop()
+        self._anim_phase = 0.0
         self._build_geometry(toolpath)
         self.fit_view()   # also calls update()
 
@@ -296,11 +447,40 @@ class _IsometricViewport(QWidget):
         yaw_deg, pitch_deg = orientations.get(face, orientations["iso"])
         self.set_view_angles(yaw_deg, pitch_deg, fit=True)
 
-    def set_highlight(self, line_number: int | None) -> None:
-        """Change the highlighted line and trigger a repaint."""
-        if self._highlighted == line_number:
+    def set_navigation_style(self, style: str) -> None:
+        """Set active mouse navigation style."""
+        self._nav_style = style if style in SUPPORTED_NAV_STYLES else NAV_STYLE_CAD
+
+    def set_highlight(self, line_numbers: int | set[int] | frozenset[int] | None) -> None:
+        """Change the highlighted lines and trigger a repaint."""
+        if isinstance(line_numbers, int):
+            new_hl: frozenset[int] = frozenset({line_numbers})
+        elif line_numbers:
+            new_hl = frozenset(line_numbers)
+        else:
+            new_hl = frozenset()
+        if self._highlighted == new_hl:
             return
-        self._highlighted = line_number
+        self._highlighted = new_hl
+        if new_hl:
+            self._anim_phase = 0.0
+            self._anim_dir = 1.0
+            if not self._anim_timer.isActive():
+                self._anim_timer.start()
+        else:
+            self._anim_timer.stop()
+            self._anim_phase = 0.0
+        self.update()
+
+    def _on_anim_tick(self) -> None:
+        """Advance animation phase and schedule a repaint."""
+        self._anim_phase += self._anim_dir * 0.02
+        if self._anim_phase >= 1.0:
+            self._anim_phase = 1.0
+            self._anim_dir = -1.0
+        elif self._anim_phase <= 0.0:
+            self._anim_phase = 0.0
+            self._anim_dir = 1.0
         self.update()
 
     def fit_view(self) -> None:
@@ -342,22 +522,25 @@ class _IsometricViewport(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         self.setFocus()
 
-        if (
-            event.button() == Qt.MouseButton.RightButton
-            and (event.modifiers() & Qt.KeyboardModifier.ControlModifier)
-        ):
+        style_bindings = _STYLE_BINDINGS.get(self._nav_style, _STYLE_BINDINGS[NAV_STYLE_CAD])
+        start_rotate = any(_binding_matches(event, b) for b in style_bindings["rotate"])
+        start_pan = any(_binding_matches(event, b) for b in style_bindings["pan"])
+
+        if start_rotate:
             self._rot_drag_start = event.position()
             self._yaw_at_drag = self._yaw_deg
             self._pitch_at_drag = self._pitch_deg
             self._rot_anchor_screen = QPointF(event.position())
             self._rot_anchor_world = self._pick_world_anchor(event.position())
+            self._rot_button = event.button()
             self.setCursor(Qt.CursorShape.SizeAllCursor)
             event.accept()
             return
 
-        if event.button() == Qt.MouseButton.MiddleButton:
+        if start_pan:
             self._drag_start = event.position()
             self._pan_at_drag = QPointF(self._pan)
+            self._pan_button = event.button()
             self.setCursor(Qt.CursorShape.ClosedHandCursor)
             event.accept()
             return
@@ -402,22 +585,35 @@ class _IsometricViewport(QWidget):
             event.accept()
             return
 
+        # Lasso: left button held and drag exceeds 4-pixel dead zone.
+        if self._left_press_pos is not None:
+            delta = event.position() - self._left_press_pos
+            if not self._in_lasso and delta.x() ** 2 + delta.y() ** 2 > 16.0:
+                self._in_lasso = True
+            if self._in_lasso:
+                self._lasso_current = QPointF(event.position())
+                self.update()
+                event.accept()
+                return
+
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.RightButton:
+        if self._rot_drag_start is not None and event.button() == self._rot_button:
             self._rot_drag_start = None
             self._yaw_at_drag = None
             self._pitch_at_drag = None
             self._rot_anchor_world = None
             self._rot_anchor_screen = None
+            self._rot_button = None
             self.setCursor(Qt.CursorShape.CrossCursor)
             event.accept()
             return
 
-        if event.button() == Qt.MouseButton.MiddleButton:
+        if self._drag_start is not None and event.button() == self._pan_button:
             self._drag_start = None
             self._pan_at_drag = None
+            self._pan_button = None
             self.setCursor(Qt.CursorShape.CrossCursor)
             event.accept()
             return
@@ -425,13 +621,56 @@ class _IsometricViewport(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             press_pos = self._left_press_pos
             self._left_press_pos = None
-            if press_pos is not None:
-                delta = event.position() - press_pos
-                if delta.x() * delta.x() + delta.y() * delta.y() <= 16.0:
-                    line_number = self._pick_segment_line(event.position())
-                    if line_number is not None:
-                        self.set_highlight(line_number)
-                        self.segment_selected.emit(line_number)
+            if self._in_lasso and press_pos is not None:
+                # --- Lasso release: select all segments whose points lie in the rect ---
+                self._in_lasso = False
+                lasso_rect = QRectF(press_pos, event.position()).normalized()
+                # Convert screen rect to viewport/projected coords.
+                z = self._zoom if self._zoom != 0.0 else 1.0
+                vp_rect = QRectF(
+                    (lasso_rect.left()   - self._pan.x()) / z,
+                    (lasso_rect.top()    - self._pan.y()) / z,
+                    lasso_rect.width()  / z,
+                    lasso_rect.height() / z,
+                )
+                lines: set[int] = set()
+                for seg in self._segs:
+                    if seg.line_number is None:
+                        continue
+                    for pt in seg.points:
+                        if vp_rect.contains(pt):
+                            lines.add(seg.line_number)
+                            break
+                self._lasso_current = None
+                self.update()
+                if lines:
+                    shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                    new_hl = (self._highlighted | frozenset(lines)) if shift else frozenset(lines)
+                    self.set_highlight(new_hl)
+                    self.segments_selected.emit(sorted(new_hl))
+                elif not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                    self.set_highlight(None)
+                    self.segments_selected.emit([])
+            else:
+                self._in_lasso = False
+                self._lasso_current = None
+                # --- Single click (no drag) ---
+                if press_pos is not None:
+                    delta = event.position() - press_pos
+                    if delta.x() * delta.x() + delta.y() * delta.y() <= 16.0:
+                        line_number = self._pick_segment_line(event.position())
+                        if line_number is not None:
+                            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                            if shift:
+                                new_hl = self._highlighted | frozenset({line_number})
+                                self.set_highlight(new_hl)
+                                self.segments_selected.emit(sorted(new_hl))
+                            else:
+                                self.set_highlight(line_number)
+                                self.segment_selected.emit(line_number)
+                        elif not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier):
+                            self.set_highlight(None)
+                            self.segments_selected.emit([])
             event.accept()
             return
 
@@ -495,18 +734,19 @@ class _IsometricViewport(QWidget):
         # Layer 3: axis arrows.
         self._paint_axes(p)
 
-        # Layer 4: toolpath lines — split into three buckets.
+        # Layer 4: toolpath lines — split into buckets.
         rapid: list[QLineF] = []
         cut: list[QLineF] = []
-        hi: list[QLineF] = []
+        hi_cut: list[QLineF] = []
+        hi_rapid: list[QLineF] = []
         hl = self._highlighted
         for seg in self._segs:
             pts = seg.points
-            is_hl = seg.line_number == hl
+            is_hl = bool(hl) and seg.line_number in hl
             for i in range(len(pts) - 1):
                 ln = QLineF(pts[i], pts[i + 1])
                 if is_hl:
-                    hi.append(ln)
+                    (hi_rapid if seg.is_rapid else hi_cut).append(ln)
                 elif seg.is_rapid:
                     rapid.append(ln)
                 else:
@@ -518,13 +758,43 @@ class _IsometricViewport(QWidget):
         if cut:
             p.setPen(_PEN_CUT)
             p.drawLines(cut)
-        if hi:
-            p.setPen(_PEN_HIGHLIGHT)
-            p.drawLines(hi)
+        if hi_cut or hi_rapid:
+            # Animated: fade from base colour → highlight red, width 1.5 → 3.0.
+            t = self._anim_phase
+            t_s = t * t * (3.0 - 2.0 * t)       # smoothstep for nicer fade
+            width = 1.5 + t_s * 1.5
+            hr, hg, hb = _HIGHLIGHT_COLOR.red(), _HIGHLIGHT_COLOR.green(), _HIGHLIGHT_COLOR.blue()
+            if hi_cut:
+                base = _CUT_COLOR
+                c = QColor(
+                    int(base.red()   + (hr - base.red())   * t_s),
+                    int(base.green() + (hg - base.green()) * t_s),
+                    int(base.blue()  + (hb - base.blue())  * t_s),
+                )
+                p.setPen(_cosmetic_pen(c, width))
+                p.drawLines(hi_cut)
+            if hi_rapid:
+                base = _RAPID_COLOR
+                c = QColor(
+                    int(base.red()   + (hr - base.red())   * t_s),
+                    int(base.green() + (hg - base.green()) * t_s),
+                    int(base.blue()  + (hb - base.blue())  * t_s),
+                )
+                p.setPen(_cosmetic_pen(c, width))
+                p.drawLines(hi_rapid)
 
         p.restore()
 
         # Axis overlay is painted in screen space so text and tick size stay readable.
+        # Lasso rubber band (screen space).
+        if self._in_lasso and self._left_press_pos is not None and self._lasso_current is not None:
+            lasso_pen = QPen(QColor("#3399FF"), 1.5, Qt.PenStyle.DashLine)
+            lasso_pen.setCosmetic(True)
+            p.setPen(lasso_pen)
+            p.setBrush(QBrush(QColor(51, 153, 255, 40)))
+            p.drawRect(QRectF(self._left_press_pos, self._lasso_current).normalized())
+            p.setBrush(Qt.BrushStyle.NoBrush)
+
         self._paint_axis_overlay(p)
         p.end()
 
@@ -1037,11 +1307,13 @@ class CanvasPanel(QWidget):
     """
 
     segment_selected = pyqtSignal(int)
+    segments_selected = pyqtSignal(list)   # list[int] – lasso / Shift multi-selection
     warning_selected = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._language = "de"
+        self._navigation_style = NAV_STYLE_CAD
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -1064,6 +1336,7 @@ class CanvasPanel(QWidget):
         # --- drawing viewport ---
         self._viewport = _IsometricViewport()
         self._viewport.segment_selected.connect(self.segment_selected)
+        self._viewport.segments_selected.connect(self.segments_selected)
         self._viewport.view_orientation_changed.connect(self._view_cube.set_orientation)
         self._view_cube.face_selected.connect(self._viewport.set_standard_view)
         layout.addWidget(self._viewport, stretch=1)
@@ -1091,7 +1364,11 @@ class CanvasPanel(QWidget):
 
     def highlight_segment(self, line_number: int) -> None:
         """Highlight the segment corresponding to the given G-Code line."""
-        self._viewport.set_highlight(line_number)
+        self._viewport.set_highlight({line_number})
+
+    def highlight_segments(self, line_numbers: list[int]) -> None:
+        """Highlight the segments corresponding to a list of G-Code lines."""
+        self._viewport.set_highlight(set(line_numbers))
 
     def show_warnings(self, warnings: list[AnalysisWarning]) -> None:
         """Store analysis warnings and update floating dialog contents."""
@@ -1103,6 +1380,15 @@ class CanvasPanel(QWidget):
             return
         if self._warnings_dialog is not None:
             self._warnings_dialog.set_warnings(self._warnings)
+
+    def set_navigation_style(self, style: str) -> None:
+        """Set mouse navigation style for the viewport."""
+        self._navigation_style = style if style in SUPPORTED_NAV_STYLES else NAV_STYLE_CAD
+        self._viewport.set_navigation_style(self._navigation_style)
+
+    def get_navigation_style(self) -> str:
+        """Return current mouse navigation style id."""
+        return self._navigation_style
 
     def set_language(self, language: str) -> None:
         """Set UI language for panel labels."""

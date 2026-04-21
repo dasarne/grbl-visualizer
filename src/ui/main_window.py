@@ -1,5 +1,6 @@
 """Main application window for GCode Lisa."""
 
+import sys
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
@@ -10,8 +11,9 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QToolButton,
 )
-from PyQt6.QtCore import Qt, QSettings
-from PyQt6.QtGui import QAction, QKeySequence
+from PyQt6.QtCore import Qt, QSettings, QProcess
+from PyQt6.QtGui import QAction, QKeySequence, QCursor
+from .resources import get_string
 
 from .editor_panel import EditorPanel
 from .canvas_panel import CanvasPanel
@@ -19,6 +21,7 @@ from .comment_panel import CommentPanel
 from .settings_dialog import SettingsDialog
 from .about_dialog import AboutDialog
 from .find_replace_dialog import FindReplaceDialog
+from .canvas_panel import NAV_STYLE_CAD
 from ..gcode.grbl_versions import DEFAULT_VERSION
 from ..gcode.parser import GCodeParser
 from ..analyzer.analyzer import GCodeAnalyzer, WarningSeverity
@@ -33,6 +36,7 @@ class MainWindow(QMainWindow):
         self._settings = QSettings("dasarne", "GCodeLisa")
         self._language = self._settings.value("ui/language", "de", str)
         self._current_version = self._settings.value("grbl/version", DEFAULT_VERSION, str)
+        self._mouse_nav_style = self._settings.value("ui/mouse_navigation", NAV_STYLE_CAD, str)
         self._recent_files: list[str] = list(
             self._settings.value("recent/files", [], list) or []
         )
@@ -44,6 +48,7 @@ class MainWindow(QMainWindow):
         self._editor_panel = EditorPanel()
         self._comment_panel = CommentPanel()
         self._canvas_panel = CanvasPanel()
+        self._canvas_panel.set_navigation_style(self._mouse_nav_style)
         self._loaded_content: str = ""
         self._loaded_path: str | None = None
         self._is_dirty = False
@@ -71,7 +76,9 @@ class MainWindow(QMainWindow):
         """Create the application menu bar."""
         menu_bar = self.menuBar()
 
+        # --- Datei-Menü ---
         self._file_menu = menu_bar.addMenu("")
+
         self._new_action = QAction("", self)
         self._new_action.setShortcut(QKeySequence.StandardKey.New)
         self._new_action.triggered.connect(self.new_file)
@@ -81,6 +88,12 @@ class MainWindow(QMainWindow):
         self._open_action.setShortcut(QKeySequence.StandardKey.Open)
         self._open_action.triggered.connect(self.open_file)
         self._file_menu.addAction(self._open_action)
+
+        # Untermenü "Letzte Dateien" direkt unter Öffnen
+        self._recent_menu = self._file_menu.addMenu("")
+        self._refresh_recent_menu()
+
+        self._file_menu.addSeparator()
 
         self._save_action = QAction("", self)
         self._save_action.setShortcut(QKeySequence.StandardKey.Save)
@@ -97,14 +110,6 @@ class MainWindow(QMainWindow):
         self._settings_action.triggered.connect(self.open_settings)
         self._file_menu.addAction(self._settings_action)
 
-        self._about_action = QAction("", self)
-        self._about_action.triggered.connect(self.open_about)
-        self._file_menu.addAction(self._about_action)
-
-        self._recent_separator = self._file_menu.addSeparator()
-        self._recent_actions: list[QAction] = []
-        self._refresh_recent_menu()
-
         self._file_menu.addSeparator()
 
         self._exit_action = QAction("", self)
@@ -112,7 +117,9 @@ class MainWindow(QMainWindow):
         self._exit_action.triggered.connect(self.close)
         self._file_menu.addAction(self._exit_action)
 
+        # --- Bearbeiten-Menü ---
         self._edit_menu = menu_bar.addMenu("")
+
         self._undo_action = QAction("", self)
         self._undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self._undo_action.triggered.connect(self._editor_panel.undo)
@@ -152,10 +159,19 @@ class MainWindow(QMainWindow):
         self._messages_action.triggered.connect(self._canvas_panel.show_warning_dialog)
         self._edit_menu.addAction(self._messages_action)
 
+        # --- Info-Menü (neben Bearbeiten) ---
+        self._info_menu = menu_bar.addMenu("")
+
+        self._about_action = QAction("", self)
+        self._about_action.triggered.connect(self.open_about)
+        self._info_menu.addAction(self._about_action)
+
     def _setup_statusbar(self) -> None:
         """Initialise the status bar."""
         self._issues_button = QToolButton(self)
         self._issues_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self._issues_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._issues_button.setToolTip(self._tr("status.issues_tooltip"))
         self._issues_button.clicked.connect(self._canvas_panel.show_warning_dialog)
         self._issues_button.hide()
         self.statusBar().addPermanentWidget(self._issues_button)
@@ -163,8 +179,10 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self) -> None:
         """Wire editor ↔ comment panel ↔ canvas bidirectional signals."""
-        self._editor_panel.line_selected.connect(self._on_editor_line_selected)
+        # line_selected (single int): only drives the comment-strip cursor
         self._editor_panel.line_selected.connect(self._comment_panel.set_current_line)
+        # lines_selected (list[int]): drives canvas multi-highlight
+        self._editor_panel.lines_selected.connect(self._on_editor_lines_selected)
         self._editor_panel.content_changed.connect(self._on_editor_content_changed)
         self._comment_panel.comment_selected.connect(self._editor_panel.highlight_line)
         self._comment_panel.comment_selected.connect(self._canvas_panel.highlight_segment)
@@ -173,6 +191,7 @@ class MainWindow(QMainWindow):
         self._canvas_panel.warning_selected.connect(self._editor_panel.highlight_line)
         self._canvas_panel.warning_selected.connect(self._canvas_panel.highlight_segment)
         self._canvas_panel.warning_selected.connect(self._comment_panel.set_current_line)
+        self._canvas_panel.segments_selected.connect(self._on_canvas_segments_selected)
 
     def open_file(self) -> None:
         """Open a G-Code file, parse it, analyse it, and display warnings."""
@@ -188,14 +207,14 @@ class MainWindow(QMainWindow):
             self._open_file_path(path)
 
     def new_file(self) -> None:
-        """Clear editor for a new G-Code document."""
-        if not self._maybe_save_before_destructive_action():
-            return
-        self._loaded_path = None
-        self._loaded_content = ""
-        self._load_content("")
-        self._set_dirty(False)
-        self._update_window_title()
+        """Open a new application instance."""
+        started = QProcess.startDetached(sys.executable, ["-m", "src.main"])
+        if not started:
+            QMessageBox.warning(
+                self,
+                self._tr("file.new"),
+                self._tr("status.new_instance_failed"),
+            )
 
     def save_file(self) -> bool:
         """Save the currently loaded G-Code to a file chosen by the user."""
@@ -241,14 +260,18 @@ class MainWindow(QMainWindow):
             parent=self,
             current_version=self._current_version,
             current_language=self._language,
+            current_mouse_nav_style=self._mouse_nav_style,
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
 
         self._current_version = dialog.get_selected_version()
         self._language = dialog.get_selected_language()
+        self._mouse_nav_style = dialog.get_selected_mouse_nav_style()
         self._settings.setValue("grbl/version", self._current_version)
         self._settings.setValue("ui/language", self._language)
+        self._settings.setValue("ui/mouse_navigation", self._mouse_nav_style)
+        self._canvas_panel.set_navigation_style(self._mouse_nav_style)
 
         if self._find_replace_dialog is not None:
             self._find_replace_dialog.set_language(self._language)
@@ -269,8 +292,25 @@ class MainWindow(QMainWindow):
     def _open_file_path(self, path: str) -> None:
         if not self._maybe_save_before_destructive_action():
             return
-        with open(path, "r", encoding="utf-8") as fh:
-            content = fh.read()
+
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                content = fh.read()
+        except FileNotFoundError:
+            # Remove stale recent-file entry and inform the user.
+            self._recent_files = [p for p in self._recent_files if p != path]
+            self._settings.setValue("recent/files", self._recent_files)
+            self._refresh_recent_menu()
+            msg = self._tr("file.open_missing").format(path=path)
+            QMessageBox.warning(self, self._tr("file.open"), msg)
+            self.statusBar().showMessage(msg)
+            return
+        except OSError as exc:
+            msg = self._tr("file.open_failed").format(path=path, error=str(exc))
+            QMessageBox.warning(self, self._tr("file.open"), msg)
+            self.statusBar().showMessage(msg)
+            return
+
         self._loaded_path = path
         self._add_recent_file(path)
         self._load_content(content, label=path)
@@ -309,7 +349,8 @@ class MainWindow(QMainWindow):
         error_count = sum(1 for w in warnings if w.severity == WarningSeverity.ERROR)
         warning_count = sum(1 for w in warnings if w.severity == WarningSeverity.WARNING)
         issue_count = error_count + warning_count
-        self._update_issues_button(issue_count, error_count, warning_count)
+        message_count = len(warnings)
+        self._update_issues_button(message_count, error_count, warning_count)
 
         parts: list[str] = []
         if label and not self._is_dirty:
@@ -331,12 +372,27 @@ class MainWindow(QMainWindow):
         self._current_version = version_id
 
     def _on_editor_line_selected(self, line_number: int) -> None:
-        """Highlight the canvas segment corresponding to the selected editor line."""
-        self._canvas_panel.highlight_segment(line_number)
+        """Kept for compatibility – canvas routing now via lines_selected."""
+
+    def _on_editor_lines_selected(self, line_numbers: list[int]) -> None:
+        """Highlight canvas segments for all selected editor lines."""
+        self._canvas_panel.highlight_segments(line_numbers)
+        if len(line_numbers) == 1:
+            self._comment_panel.set_current_line(line_numbers[0])
+        elif len(line_numbers) > 1:
+            self._comment_panel.set_current_line(None)
 
     def _on_canvas_segment_selected(self, line_number: int) -> None:
         """Scroll the editor to the line corresponding to the selected canvas segment."""
         self._editor_panel.highlight_line(line_number)
+
+    def _on_canvas_segments_selected(self, line_numbers: list[int]) -> None:
+        """Select the editor text range for a lasso / Shift multi-selection."""
+        self._editor_panel.highlight_lines(line_numbers)
+        if len(line_numbers) == 1:
+            self._comment_panel.set_current_line(min(line_numbers))
+        elif len(line_numbers) > 1:
+            self._comment_panel.set_current_line(None)
 
     def _on_find_replace(self) -> None:
         """Open the floating Find and Replace dialog."""
@@ -370,19 +426,19 @@ class MainWindow(QMainWindow):
 
     def _on_find_next_requested(self, term: str, use_regex: bool, search_in_selection: bool) -> None:
         if self._editor_panel.find_next(term, use_regex, search_in_selection):
-            self._find_replace_dialog.set_status(f"Found: {term}")
+            self._find_replace_dialog.set_status(self._tr("status.search_found").format(term=term))
         else:
-            self._find_replace_dialog.set_status(f"Not found: {term}")
+            self._find_replace_dialog.set_status(self._tr("status.search_not_found").format(term=term))
 
     def _on_find_previous_requested(self, term: str, use_regex: bool, search_in_selection: bool) -> None:
         if self._editor_panel.find_previous(term, use_regex, search_in_selection):
-            self._find_replace_dialog.set_status(f"Found: {term}")
+            self._find_replace_dialog.set_status(self._tr("status.search_found").format(term=term))
         else:
-            self._find_replace_dialog.set_status(f"Not found: {term}")
+            self._find_replace_dialog.set_status(self._tr("status.search_not_found").format(term=term))
 
     def _on_replace_next_requested(self, needle: str, replacement: str, use_regex: bool, search_in_selection: bool) -> None:
         if self._editor_panel.replace_next(needle, replacement, use_regex, search_in_selection):
-            self._find_replace_dialog.set_status(f"Replaced: {needle}")
+            self._find_replace_dialog.set_status(self._tr("status.replaced_one").format(term=needle))
             self._loaded_content = self._editor_panel.get_content()
             self._set_dirty(True)
             self._load_content(
@@ -390,12 +446,13 @@ class MainWindow(QMainWindow):
                 label=self._loaded_path or self._tr("title.untitled"),
                 reparse=True,
             )
+            self._on_editor_lines_selected(self._editor_panel.get_selected_lines())
         else:
-            self._find_replace_dialog.set_status(f"Not found: {needle}")
+            self._find_replace_dialog.set_status(self._tr("status.search_not_found").format(term=needle))
 
     def _on_replace_previous_requested(self, needle: str, replacement: str, use_regex: bool, search_in_selection: bool) -> None:
         if self._editor_panel.replace_previous(needle, replacement, use_regex, search_in_selection):
-            self._find_replace_dialog.set_status(f"Replaced: {needle}")
+            self._find_replace_dialog.set_status(self._tr("status.replaced_one").format(term=needle))
             self._loaded_content = self._editor_panel.get_content()
             self._set_dirty(True)
             self._load_content(
@@ -403,13 +460,14 @@ class MainWindow(QMainWindow):
                 label=self._loaded_path or self._tr("title.untitled"),
                 reparse=True,
             )
+            self._on_editor_lines_selected(self._editor_panel.get_selected_lines())
         else:
-            self._find_replace_dialog.set_status(f"Not found: {needle}")
+            self._find_replace_dialog.set_status(self._tr("status.search_not_found").format(term=needle))
 
     def _on_replace_all_requested(self, needle: str, replacement: str, use_regex: bool, search_in_selection: bool) -> None:
         count = self._editor_panel.replace_all(needle, replacement, use_regex, search_in_selection)
         if count > 0:
-            self._find_replace_dialog.set_status(f"Replaced {count} occurrence(s)")
+            self._find_replace_dialog.set_status(self._tr("status.replaced").format(count=count))
             self._loaded_content = self._editor_panel.get_content()
             self._set_dirty(True)
             self._load_content(
@@ -417,24 +475,21 @@ class MainWindow(QMainWindow):
                 label=self._loaded_path or self._tr("title.untitled"),
                 reparse=True,
             )
+            self._on_editor_lines_selected(self._editor_panel.get_selected_lines())
         else:
-            self._find_replace_dialog.set_status(f"Not found: {needle}")
+            self._find_replace_dialog.set_status(self._tr("status.search_not_found").format(term=needle))
 
     def _refresh_recent_menu(self) -> None:
-        for action in self._recent_actions:
-            self._file_menu.removeAction(action)
-        self._recent_actions.clear()
-
-        has_recent = bool(self._recent_files)
-        self._recent_separator.setVisible(has_recent)
-        if not has_recent:
+        self._recent_menu.clear()
+        if not self._recent_files:
+            empty = QAction(self._tr("file.recent_empty"), self)
+            empty.setEnabled(False)
+            self._recent_menu.addAction(empty)
             return
-
         for path in self._recent_files[: self._max_recent_files]:
             action = QAction(path, self)
             action.triggered.connect(lambda _checked=False, p=path: self._open_file_path(p))
-            self._file_menu.insertAction(self._recent_separator, action)
-            self._recent_actions.append(action)
+            self._recent_menu.addAction(action)
 
     def _add_recent_file(self, path: str) -> None:
         normalized = str(Path(path))
@@ -447,6 +502,8 @@ class MainWindow(QMainWindow):
     def _apply_language(self) -> None:
         self._file_menu.setTitle(self._tr("menu.file"))
         self._edit_menu.setTitle(self._tr("menu.edit"))
+        self._info_menu.setTitle(self._tr("menu.info"))
+        self._recent_menu.setTitle(self._tr("file.recent"))
         self._new_action.setText(self._tr("file.new"))
         self._open_action.setText(self._tr("file.open"))
         self._save_action.setText(self._tr("file.save"))
@@ -519,84 +576,4 @@ class MainWindow(QMainWindow):
             event.ignore()
 
     def _tr(self, key: str) -> str:
-        de = {
-            "app.title": "GCode Lisa",
-            "menu.file": "&Datei",
-            "menu.edit": "&Bearbeiten",
-            "file.new": "&Neu",
-            "file.open": "&Oeffnen...",
-            "file.save": "&Speichern",
-            "file.save_as": "Speichern &unter...",
-            "file.settings": "&Einstellungen",
-            "file.about": "&Info",
-            "file.quit": "&Beenden",
-            "file.open_title": "G-Code-Datei oeffnen",
-            "file.save_title": "G-Code-Datei speichern",
-            "file.save_nothing": "Keine geladene G-Code-Datei zum Speichern.",
-            "status.ready": "Bereit",
-            "status.saved": "Gespeichert: {path}",
-            "status.loaded": "Geladen: {path}",
-            "status.errors": "{count} Fehler",
-            "status.warnings": "{count} Warnungen",
-            "status.no_issues": "Keine Probleme gefunden",
-            "status.issues_button": "Meldungen/Fehler: {total} (E:{errors}, W:{warnings})",
-            "status.parse_error": "Parserfehler: {msg}",
-            "status.replaced": "{count} Treffer ersetzt",
-            "status.search_matches": "{count} Treffer",
-            "status.search_not_found": "Nicht gefunden: {term}",
-            "edit.undo": "&Rueckgaengig",
-            "edit.redo": "&Wiederherstellen",
-            "edit.copy": "&Kopieren",
-            "edit.paste": "&Einfuegen",
-            "edit.find": "&Suchen",
-            "edit.replace": "&Ersetzen",
-            "edit.messages": "&Meldungen",
-            "edit.find_prompt": "Suchbegriff:",
-            "edit.find_not_found": "Kein Treffer gefunden.",
-            "edit.replace_find": "Suche:",
-            "edit.replace_with": "Ersetzen durch:",
-            "title.untitled": "Unbenannt",
-            "confirm.unsaved_title": "Ungespeicherte Aenderungen",
-            "confirm.unsaved_message": "Die Datei wurde geaendert. Vor dem Fortfahren speichern?",
-        }
-        en = {
-            "app.title": "GCode Lisa",
-            "menu.file": "&File",
-            "menu.edit": "&Edit",
-            "file.new": "&New",
-            "file.open": "&Open...",
-            "file.save": "&Save",
-            "file.save_as": "Save &As...",
-            "file.settings": "&Settings",
-            "file.about": "&Info",
-            "file.quit": "&Quit",
-            "file.open_title": "Open G-Code File",
-            "file.save_title": "Save G-Code File",
-            "file.save_nothing": "No G-Code loaded to save.",
-            "status.ready": "Ready",
-            "status.saved": "Saved: {path}",
-            "status.loaded": "Loaded: {path}",
-            "status.errors": "{count} error(s)",
-            "status.warnings": "{count} warning(s)",
-            "status.no_issues": "No issues found",
-            "status.issues_button": "Messages/Errors: {total} (E:{errors}, W:{warnings})",
-            "status.parse_error": "Parse error: {msg}",
-            "status.replaced": "Replaced {count} occurrence(s)",
-            "status.search_matches": "{count} match(es)",
-            "status.search_not_found": "Not found: {term}",
-            "edit.undo": "&Undo",
-            "edit.redo": "&Redo",
-            "edit.copy": "&Copy",
-            "edit.paste": "&Paste",
-            "edit.find": "&Find",
-            "edit.replace": "&Replace",
-            "edit.messages": "&Messages",
-            "edit.find_prompt": "Find:",
-            "edit.find_not_found": "No match found.",
-            "edit.replace_find": "Find:",
-            "edit.replace_with": "Replace with:",
-            "title.untitled": "Untitled",
-            "confirm.unsaved_title": "Unsaved changes",
-            "confirm.unsaved_message": "The file has unsaved changes. Save before continuing?",
-        }
-        return (de if self._language == "de" else en).get(key, key)
+        return get_string(self._language, key)

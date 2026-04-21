@@ -12,6 +12,22 @@ from PyQt6.QtWidgets import (
 )
 
 from ..gcode.grbl_versions import GRBL_VERSIONS, DEFAULT_VERSION, get_version
+from .canvas_panel import (
+    NAV_STYLE_BLENDER,
+    NAV_STYLE_CAD,
+    NAV_STYLE_GESTURE,
+    NAV_STYLE_LEGACY,
+    NAV_STYLE_MAYA_GESTURE,
+    NAV_STYLE_OPEN_CASCADE,
+    NAV_STYLE_OPEN_INVENTOR,
+    NAV_STYLE_OPEN_SCAD,
+    NAV_STYLE_REVIT,
+    NAV_STYLE_SIEMENS_NX,
+    NAV_STYLE_SOLIDWORKS,
+    NAV_STYLE_TINKERCAD,
+    NAV_STYLE_TOUCHPAD,
+)
+from .resources import get_strings
 
 
 class SettingsDialog(QDialog):
@@ -22,10 +38,12 @@ class SettingsDialog(QDialog):
         parent=None,
         current_version: str = DEFAULT_VERSION,
         current_language: str = "de",
+        current_mouse_nav_style: str = NAV_STYLE_CAD,
     ) -> None:
         super().__init__(parent)
         self._current_version = current_version
         self._current_language = current_language
+        self._current_mouse_nav_style = current_mouse_nav_style
         self._setup_ui()
         self._apply_language()
 
@@ -46,10 +64,29 @@ class SettingsDialog(QDialog):
         self._language_combo.setCurrentIndex(max(0, idx))
         self._language_combo.currentIndexChanged.connect(self._apply_language)
 
+        self._mouse_nav_combo = QComboBox()
+        self._mouse_nav_combo.addItem("", NAV_STYLE_CAD)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_BLENDER)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_GESTURE)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_MAYA_GESTURE)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_OPEN_CASCADE)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_OPEN_INVENTOR)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_OPEN_SCAD)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_REVIT)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_SIEMENS_NX)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_SOLIDWORKS)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_TINKERCAD)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_TOUCHPAD)
+        self._mouse_nav_combo.addItem("", NAV_STYLE_LEGACY)
+        idx = self._mouse_nav_combo.findData(self._current_mouse_nav_style)
+        self._mouse_nav_combo.setCurrentIndex(max(0, idx))
+
         self._version_label = QLabel("")
         self._language_label = QLabel("")
+        self._mouse_nav_label = QLabel("")
         self._form.addRow(self._version_label, self._version_combo)
         self._form.addRow(self._language_label, self._language_combo)
+        self._form.addRow(self._mouse_nav_label, self._mouse_nav_combo)
         layout.addLayout(self._form)
 
         self._feature_table = QTableWidget(0, 2)
@@ -72,6 +109,10 @@ class SettingsDialog(QDialog):
         """Return selected UI language code ('de' or 'en')."""
         return self._language_combo.currentData()
 
+    def get_selected_mouse_nav_style(self) -> str:
+        """Return selected mouse navigation style id."""
+        return self._mouse_nav_combo.currentData()
+
     def _on_version_changed(self, version: str) -> None:
         """Refresh the feature table when the user picks a different version."""
         self._populate_feature_table(version)
@@ -88,29 +129,26 @@ class SettingsDialog(QDialog):
 
     def _apply_language(self) -> None:
         lang = self._language_combo.currentData() or self._current_language
-        de = {
-            "title": "Einstellungen",
-            "version": "GRBL-Dialekt:",
-            "language": "Sprache:",
-            "command": "Befehl",
-            "supported": "Unterstuetzt",
-            "ok": "OK",
-            "cancel": "Abbrechen",
-        }
-        en = {
-            "title": "Settings",
-            "version": "GRBL dialect:",
-            "language": "Language:",
-            "command": "Command",
-            "supported": "Supported",
-            "ok": "OK",
-            "cancel": "Cancel",
-        }
-        tr = de if lang == "de" else en
-
-        self.setWindowTitle(tr["title"])
-        self._version_label.setText(tr["version"])
-        self._language_label.setText(tr["language"])
-        self._feature_table.setHorizontalHeaderLabels([tr["command"], tr["supported"]])
-        self._buttons.button(QDialogButtonBox.StandardButton.Ok).setText(tr["ok"])
-        self._buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(tr["cancel"])
+        s = get_strings(lang)
+        self.setWindowTitle(s["settings.title"])
+        self._version_label.setText(s["settings.version"])
+        self._language_label.setText(s["settings.language"])
+        self._mouse_nav_label.setText(s["settings.mouse_navigation"])
+        self._mouse_nav_combo.setItemText(0, s["settings.mouse_navigation.cad"])
+        self._mouse_nav_combo.setItemText(1, s["settings.mouse_navigation.blender"])
+        self._mouse_nav_combo.setItemText(2, s["settings.mouse_navigation.gesture"])
+        self._mouse_nav_combo.setItemText(3, s["settings.mouse_navigation.maya_gesture"])
+        self._mouse_nav_combo.setItemText(4, s["settings.mouse_navigation.open_cascade"])
+        self._mouse_nav_combo.setItemText(5, s["settings.mouse_navigation.open_inventor"])
+        self._mouse_nav_combo.setItemText(6, s["settings.mouse_navigation.open_scad"])
+        self._mouse_nav_combo.setItemText(7, s["settings.mouse_navigation.revit"])
+        self._mouse_nav_combo.setItemText(8, s["settings.mouse_navigation.siemens_nx"])
+        self._mouse_nav_combo.setItemText(9, s["settings.mouse_navigation.solidworks"])
+        self._mouse_nav_combo.setItemText(10, s["settings.mouse_navigation.tinkercad"])
+        self._mouse_nav_combo.setItemText(11, s["settings.mouse_navigation.touchpad"])
+        self._mouse_nav_combo.setItemText(12, s["settings.mouse_navigation.legacy"])
+        self._feature_table.setHorizontalHeaderLabels(
+            [s["settings.command"], s["settings.supported"]]
+        )
+        self._buttons.button(QDialogButtonBox.StandardButton.Ok).setText(s["settings.ok"])
+        self._buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(s["settings.cancel"])
