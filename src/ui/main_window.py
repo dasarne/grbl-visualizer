@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QComboBox,
     QSplitter,
+    QToolButton,
 )
 from PyQt6.QtCore import Qt, QSettings, QProcess
 from PyQt6.QtGui import QAction, QKeySequence, QCursor
@@ -74,7 +75,7 @@ class MainWindow(QMainWindow):
         self._status_dialect_label: QLabel | None = None
         self._status_profile_label: QLabel | None = None
         self._status_profile_combo: QComboBox | None = None
-        self._issues_button: QLabel | None = None
+        self._issues_button: QToolButton | None = None
         self._syncing_profile_combo = False
 
         self._setup_ui()
@@ -188,12 +189,11 @@ class MainWindow(QMainWindow):
 
     def _setup_statusbar(self) -> None:
         """Initialise the status bar."""
-        self._issues_button = QLabel(self)
-        self._issues_button.setTextFormat(Qt.TextFormat.RichText)
-        self._issues_button.setTextInteractionFlags(Qt.TextInteractionFlag.LinksAccessibleByMouse)
+        self._issues_button = QToolButton(self)
+        self._issues_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         self._issues_button.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self._issues_button.setToolTip(self._tr("status.issues_tooltip"))
-        self._issues_button.linkActivated.connect(lambda _href: self._canvas_panel.show_warning_dialog())
+        self._issues_button.clicked.connect(self._canvas_panel.show_warning_dialog)
         self._issues_button.hide()
         self.statusBar().addPermanentWidget(self._issues_button)
 
@@ -662,17 +662,26 @@ class MainWindow(QMainWindow):
 
         parts: list[str] = []
         if errors > 0:
-            parts.append(f'<span style="color:#d32f2f;">Error:{errors}</span>')
+            parts.append(f"Error:{errors}")
         if warnings > 0:
-            parts.append(f'<span style="color:#1565c0;">Warning:{warnings}</span>')
+            parts.append(f"Warning:{warnings}")
         if infos > 0:
-            parts.append(f'<span style="color:#2e7d32;">Info:{infos}</span>')
+            parts.append(f"Info:{infos}")
 
         if not parts:
             self._issues_button.hide()
             return
 
-        self._issues_button.setText(f'<a href="open" style="text-decoration:none;">{", ".join(parts)}</a>')
+        self._issues_button.setStyleSheet(
+            "QToolButton {"
+            " border: 1px solid #a9a9a9;"
+            " border-radius: 4px;"
+            " padding: 2px 6px;"
+            " background: #f4f4f4;"
+            "}"
+            "QToolButton:hover { background: #ececec; }"
+        )
+        self._issues_button.setText(", ".join(parts))
 
     def _update_window_title(self) -> None:
         base = self._tr("title.untitled")
