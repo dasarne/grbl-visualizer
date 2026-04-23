@@ -50,6 +50,7 @@ STRINGS: dict[str, str] = {
     "status.search_not_found": "Nicht gefunden: {term}",
     "status.new_instance_failed": "Neue Instanz konnte nicht gestartet werden.",
     "status.dialect_detected": "Erkannter Dialekt: {dialect} ({confidence}%)",
+    "status.profile_active": "Aktives Profil: {profile}",
 
     # -----------------------------------------------------------------------
     # Dialekt-Bezeichnungen
@@ -144,7 +145,8 @@ STRINGS: dict[str, str] = {
     # Settings dialog
     # -----------------------------------------------------------------------
     "settings.title": "Einstellungen",
-    "settings.version": "GRBL-Dialekt:",
+    "settings.version": "Dialekt-Profil:",
+    "settings.auto_detect": "Automatisch beim Laden erkennen:",
     "settings.language": "Sprache:",
     "settings.mouse_navigation": "Maus-Navigation:",
     "settings.mouse_navigation.cad": "CAD (FreeCAD)",

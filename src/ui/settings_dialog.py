@@ -1,6 +1,7 @@
 """Settings dialog for GRBL dialect and UI language."""
 
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QDialogButtonBox,
     QComboBox,
     QDialog,
@@ -11,7 +12,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-from ..gcode.grbl_versions import GRBL_VERSIONS, DEFAULT_VERSION, get_version
+from ..gcode.grbl_versions import DEFAULT_VERSION
+from ..gcode.dialects import get_profile, list_profiles
 from .navigation_service import (
     NAV_STYLE_BLENDER,
     NAV_STYLE_CAD,
@@ -31,19 +33,22 @@ from .resources import get_strings
 
 
 class SettingsDialog(QDialog):
-    """Dialog for selecting the active GRBL version and reviewing its feature set."""
+    """Dialog for selecting the active dialect profile and reviewing its commands."""
 
     def __init__(
         self,
         parent=None,
         current_version: str = DEFAULT_VERSION,
+        current_auto_detect_dialect: bool = False,
         current_language: str = "de",
         current_mouse_nav_style: str = NAV_STYLE_CAD,
     ) -> None:
         super().__init__(parent)
         self._current_version = current_version
+        self._current_auto_detect_dialect = current_auto_detect_dialect
         self._current_language = current_language
         self._current_mouse_nav_style = current_mouse_nav_style
+        self._profiles = list_profiles()
         self._setup_ui()
         self._apply_language()
 
@@ -53,9 +58,14 @@ class SettingsDialog(QDialog):
         self._form = QFormLayout()
 
         self._version_combo = QComboBox()
-        self._version_combo.addItems(GRBL_VERSIONS)
-        self._version_combo.setCurrentText(self._current_version)
+        for profile in self._profiles:
+            self._version_combo.addItem(profile.name, profile.profile_id)
+        idx = self._version_combo.findData(self._current_version)
+        self._version_combo.setCurrentIndex(max(0, idx))
         self._version_combo.currentTextChanged.connect(self._on_version_changed)
+
+        self._auto_detect_checkbox = QCheckBox()
+        self._auto_detect_checkbox.setChecked(self._current_auto_detect_dialect)
 
         self._language_combo = QComboBox()
         self._language_combo.addItem("Deutsch", "de")
@@ -82,9 +92,11 @@ class SettingsDialog(QDialog):
         self._mouse_nav_combo.setCurrentIndex(max(0, idx))
 
         self._version_label = QLabel("")
+        self._auto_detect_label = QLabel("")
         self._language_label = QLabel("")
         self._mouse_nav_label = QLabel("")
         self._form.addRow(self._version_label, self._version_combo)
+        self._form.addRow(self._auto_detect_label, self._auto_detect_checkbox)
         self._form.addRow(self._language_label, self._language_combo)
         self._form.addRow(self._mouse_nav_label, self._mouse_nav_combo)
         layout.addLayout(self._form)
@@ -103,7 +115,11 @@ class SettingsDialog(QDialog):
 
     def get_selected_version(self) -> str:
         """Return the version currently selected in the combo box."""
-        return self._version_combo.currentText()
+        return self._version_combo.currentData()
+
+    def get_auto_detect_dialect(self) -> bool:
+        """Return whether auto-detection should select profile on load."""
+        return self._auto_detect_checkbox.isChecked()
 
     def get_selected_language(self) -> str:
         """Return selected UI language code ('de' or 'en')."""
@@ -115,16 +131,16 @@ class SettingsDialog(QDialog):
 
     def _on_version_changed(self, version: str) -> None:
         """Refresh the feature table when the user picks a different version."""
-        self._populate_feature_table(version)
+        self._populate_feature_table(self.get_selected_version())
 
     def _populate_feature_table(self, version_id: str) -> None:
         """Fill the feature table for the given GRBL version."""
-        version = get_version(version_id)
-        commands = sorted(version.supported_commands | version.unsupported_commands)
+        profile = get_profile(version_id)
+        commands = sorted(profile.known_commands)
         self._feature_table.setRowCount(len(commands))
         for row, cmd in enumerate(commands):
             self._feature_table.setItem(row, 0, QTableWidgetItem(cmd))
-            supported = "✅" if cmd in version.supported_commands else "❌"
+            supported = "✅" if cmd in profile.supported_commands else "❌"
             self._feature_table.setItem(row, 1, QTableWidgetItem(supported))
 
     def _apply_language(self) -> None:
@@ -132,6 +148,7 @@ class SettingsDialog(QDialog):
         s = get_strings(lang)
         self.setWindowTitle(s["settings.title"])
         self._version_label.setText(s["settings.version"])
+        self._auto_detect_label.setText(s["settings.auto_detect"])
         self._language_label.setText(s["settings.language"])
         self._mouse_nav_label.setText(s["settings.mouse_navigation"])
         self._mouse_nav_combo.setItemText(0, s["settings.mouse_navigation.cad"])

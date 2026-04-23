@@ -23,6 +23,7 @@ from .about_dialog import AboutDialog
 from .find_replace_dialog import FindReplaceDialog
 from .navigation_service import NAV_STYLE_CAD
 from ..gcode.grbl_versions import DEFAULT_VERSION
+from ..gcode.dialects import get_profile
 from ..gcode.parser import GCodeParser
 from ..gcode.detection import DetectionResult, detect_dialect
 from ..analyzer.analyzer import GCodeAnalyzer, WarningSeverity
@@ -37,6 +38,7 @@ class MainWindow(QMainWindow):
         self._settings = QSettings("dasarne", "GCodeLisa")
         self._language = self._settings.value("ui/language", "de", str)
         self._current_version = self._settings.value("grbl/version", DEFAULT_VERSION, str)
+        self._auto_detect_profile = self._settings.value("dialect/auto_detect", False, bool)
         self._mouse_nav_style = self._settings.value("ui/mouse_navigation", NAV_STYLE_CAD, str)
         self._recent_files: list[str] = list(
             self._settings.value("recent/files", [], list) or []
@@ -261,6 +263,7 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(
             parent=self,
             current_version=self._current_version,
+            current_auto_detect_dialect=self._auto_detect_profile,
             current_language=self._language,
             current_mouse_nav_style=self._mouse_nav_style,
         )
@@ -268,9 +271,11 @@ class MainWindow(QMainWindow):
             return
 
         self._current_version = dialog.get_selected_version()
+        self._auto_detect_profile = dialog.get_auto_detect_dialect()
         self._language = dialog.get_selected_language()
         self._mouse_nav_style = dialog.get_selected_mouse_nav_style()
         self._settings.setValue("grbl/version", self._current_version)
+        self._settings.setValue("dialect/auto_detect", self._auto_detect_profile)
         self._settings.setValue("ui/language", self._language)
         self._settings.setValue("ui/mouse_navigation", self._mouse_nav_style)
         self._canvas_panel.set_navigation_style(self._mouse_nav_style)
@@ -322,13 +327,20 @@ class MainWindow(QMainWindow):
         """Parse content, run analysis, and update all UI panels."""
         self._loaded_content = content
         self._detected_dialect = detect_dialect(content)
+        analysis_profile_id = self._current_version
+        if (
+            self._auto_detect_profile
+            and self._detected_dialect
+            and self._detected_dialect.profile_id
+        ):
+            analysis_profile_id = self._detected_dialect.profile_id
         if not reparse:
             self._editor_panel.load_content(content)
 
-        parser = GCodeParser(version_id=self._current_version)
+        parser = GCodeParser(version_id=analysis_profile_id)
         try:
             program = parser.parse_text(content)
-            analyzer = GCodeAnalyzer(version_id=self._current_version)
+            analyzer = GCodeAnalyzer(version_id=analysis_profile_id)
             warnings = analyzer.analyze(program)
         except Exception as exc:
             warnings = []
@@ -365,6 +377,11 @@ class MainWindow(QMainWindow):
                     confidence=round(self._detected_dialect.confidence * 100),
                 )
             )
+        try:
+            active_profile = get_profile(analysis_profile_id)
+            parts.append(self._tr("status.profile_active").format(profile=active_profile.name))
+        except ValueError:
+            parts.append(self._tr("status.profile_active").format(profile=analysis_profile_id))
         if not issue_count:
             parts.append(self._tr("status.no_issues"))
 
