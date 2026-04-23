@@ -1210,23 +1210,16 @@ class CanvasPanel(QWidget):
         self._warnings: list[AnalysisWarning] = []
         self._warnings_dialog: WarningsDialog | None = None
 
-        # --- toolbar row with view cube ---
-        toolbar = QWidget()
-        tb = QHBoxLayout(toolbar)
-        tb.setContentsMargins(4, 2, 4, 2)
-        tb.setSpacing(4)
-        self._view_cube = _ViewCubeWidget()
-        tb.addWidget(self._view_cube)
-        tb.addStretch(1)
-        layout.addWidget(toolbar)
-
-        # --- drawing viewport ---
+        # --- drawing viewport with view cube overlay ---
         self._viewport = _IsometricViewport()
         self._viewport.segment_selected.connect(self.segment_selected)
         self._viewport.segments_selected.connect(self.segments_selected)
+        layout.addWidget(self._viewport, stretch=1)
+
+        # --- view cube as overlay (positioned in top-right) ---
+        self._view_cube = _ViewCubeWidget(self._viewport)
         self._viewport.view_orientation_changed.connect(self._view_cube.set_orientation)
         self._view_cube.face_selected.connect(self._viewport.set_standard_view)
-        layout.addWidget(self._viewport, stretch=1)
 
         self.set_language(self._language)
 
@@ -1239,6 +1232,22 @@ class CanvasPanel(QWidget):
         )
         self._dims_label.hide()
         layout.addWidget(self._dims_label, stretch=0)
+        
+        # Initial positioning of the view cube overlay
+        self._update_view_cube_position()
+
+    def _update_view_cube_position(self) -> None:
+        """Position the view cube overlay in the top-right corner of the viewport."""
+        if self._viewport.isVisible():
+            margin = 8
+            x = self._viewport.width() - self._view_cube.width() - margin
+            y = margin
+            self._view_cube.move(x, y)
+
+    def resizeEvent(self, event) -> None:
+        """Update view cube position when canvas panel is resized."""
+        super().resizeEvent(event)
+        self._update_view_cube_position()
 
     # ------------------------------------------------------------------
     # Public API  (identical signatures to the old matplotlib CanvasPanel)
