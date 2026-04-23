@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -16,10 +17,24 @@ from PyQt6.QtWidgets import (
 
 from ..analyzer.analyzer import AnalysisWarning, WarningSeverity
 
-_SEVERITY_ICON: dict[WarningSeverity, str] = {
-    WarningSeverity.ERROR: "⛔",
-    WarningSeverity.WARNING: "⚠",
-    WarningSeverity.INFO: "ℹ",
+
+def _create_severity_icon(severity: WarningSeverity) -> QIcon:
+    """Create a colored square icon for severity level."""
+    color_map = {
+        WarningSeverity.ERROR: "#FF6B6B",
+        WarningSeverity.WARNING: "#FFB800",
+        WarningSeverity.INFO: "#4A9EFF",
+    }
+    
+    pixmap = QPixmap(16, 16)
+    pixmap.fill(QColor(color_map[severity]))
+    return QIcon(pixmap)
+
+
+_SEVERITY_ICON: dict[WarningSeverity, QIcon] = {
+    WarningSeverity.ERROR: _create_severity_icon(WarningSeverity.ERROR),
+    WarningSeverity.WARNING: _create_severity_icon(WarningSeverity.WARNING),
+    WarningSeverity.INFO: _create_severity_icon(WarningSeverity.INFO),
 }
 
 _SEVERITY_LABEL: dict[WarningSeverity, str] = {
@@ -83,8 +98,9 @@ class WarningsDialog(QDialog):
             self._table.insertRow(row)
 
             severity = warning.severity
-            type_text = f"{_SEVERITY_ICON[severity]} {_SEVERITY_LABEL[severity]}"
-            type_item = QTableWidgetItem(type_text)
+            type_item = QTableWidgetItem()
+            type_item.setIcon(_SEVERITY_ICON[severity])
+            type_item.setText(_SEVERITY_LABEL[severity])
             type_item.setData(Qt.ItemDataRole.UserRole, severity.name)
 
             message_item = QTableWidgetItem(warning.message)
