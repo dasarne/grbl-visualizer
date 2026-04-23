@@ -36,7 +36,8 @@ def _score_dialects(content: str, commands: list[str]) -> tuple[dict[str, int], 
     scores = {"grbl": 0, "linuxcnc": 0, "marlin": 0}
 
     marlin_markers = {"M104", "M109", "M140", "M190", "M82", "M83", "M106", "M107"}
-    linuxcnc_markers = {"G43", "G43.1", "G54", "G55", "G56", "G57", "G58", "G59", "G64", "M6"}
+    # Prefer LinuxCNC markers that are uncommon in GRBL postprocessor output.
+    linuxcnc_markers = {"G43", "G43.1", "G61", "G64", "M6"}
     grbl_markers = {"G38.2", "G38.3", "G38.4", "G38.5"}
 
     cmd_set = set(commands)
@@ -67,6 +68,12 @@ def _score_dialects(content: str, commands: list[str]) -> tuple[dict[str, int], 
     if "$" in content:
         scores["grbl"] += 5
         reasons.append("Found '$' controller-style command lines")
+
+    # If all parsed commands stay within the GRBL command universe and no
+    # non-GRBL strong marker appears, strongly prefer GRBL as baseline.
+    if cmd_set and cmd_set.issubset(set(ALL_COMMANDS)) and not marlin_hits and not linuxcnc_hits:
+        scores["grbl"] += 6
+        reasons.append("Command set is fully GRBL-compatible")
 
     # Generic fallback evidence: plain motion/control G-code tends to be CNC-like.
     if commands and max(scores.values()) == 0:

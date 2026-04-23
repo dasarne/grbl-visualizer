@@ -48,3 +48,17 @@ def test_detect_unknown_for_non_gcode_text():
     content = "This is not a gcode program"
     result = detect_dialect(content)
     assert result.dialect == "unknown"
+
+
+def test_detect_grbl_for_common_cnc_program_not_linuxcnc():
+    content = """G21
+G90
+G54
+M3 S12000
+G0 X0 Y0
+G1 X10 Y0 F500
+M5
+"""
+    result = detect_dialect(content)
+    assert result.dialect == "grbl"
+    assert result.profile_id in {"1.1", "1.1H", "1.1j"}
