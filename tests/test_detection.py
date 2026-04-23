@@ -1,5 +1,7 @@
 """Tests for G-code dialect detection service."""
 
+from pathlib import Path
+
 from src.gcode.detection import detect_dialect
 
 
@@ -62,3 +64,14 @@ M5
     result = detect_dialect(content)
     assert result.dialect == "grbl"
     assert result.profile_id in {"1.1", "1.1H", "1.1j"}
+
+
+def test_detect_real_fixture_files():
+    root = Path(__file__).resolve().parents[1]
+    grbl = (root / "Test-Files" / "GRBL-Test.nc").read_text(encoding="utf-8")
+    linuxcnc = (root / "Test-Files" / "LinuxCNC-Test.nc").read_text(encoding="utf-8")
+    marlin = (root / "Test-Files" / "Marlin-Test.gcode").read_text(encoding="utf-8")
+
+    assert detect_dialect(grbl).dialect == "grbl"
+    assert detect_dialect(linuxcnc).dialect == "linuxcnc"
+    assert detect_dialect(marlin).dialect == "marlin"

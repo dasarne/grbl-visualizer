@@ -20,6 +20,22 @@ class DetectionResult:
     scores: dict[str, int] = field(default_factory=dict)
 
 
+def _strip_comments_for_scan(content: str) -> str:
+    """Return a scan-friendly text where inline comments are removed.
+
+    Keeps executable command text and strips comment payload from both
+    semicolon and parenthesis style comments.
+    """
+    cleaned_lines: list[str] = []
+    for raw_line in content.splitlines():
+        line = re.sub(r"\([^)]*\)", "", raw_line)
+        semi_idx = line.find(";")
+        if semi_idx >= 0:
+            line = line[:semi_idx]
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
+
+
 def _extract_commands(content: str) -> list[str]:
     commands: list[str] = []
     for match in _CMD_RE.finditer(content):
@@ -32,6 +48,7 @@ def _extract_commands(content: str) -> list[str]:
 
 def _score_dialects(content: str, commands: list[str]) -> tuple[dict[str, int], list[str]]:
     upper = content.upper()
+    scan_upper = _strip_comments_for_scan(content).upper()
     reasons: list[str] = []
     scores = {"grbl": 0, "linuxcnc": 0, "marlin": 0}
 
@@ -54,10 +71,10 @@ def _score_dialects(content: str, commands: list[str]) -> tuple[dict[str, int], 
     if linuxcnc_hits:
         scores["linuxcnc"] += 8 + len(linuxcnc_hits)
         reasons.append(f"Found LinuxCNC-style commands: {', '.join(linuxcnc_hits)}")
-    if re.search(r"\bO\d+\b", upper):
+    if re.search(r"\bO\d+\b", scan_upper):
         scores["linuxcnc"] += 5
         reasons.append("Found O-word program or subroutine labels")
-    if re.search(r"#\d+", upper):
+    if re.search(r"#\d+", scan_upper):
         scores["linuxcnc"] += 4
         reasons.append("Found parameter expressions with # variables")
 
@@ -102,7 +119,8 @@ def _detect_grbl_profile(commands: list[str]) -> tuple[str, float, str]:
 
 def detect_dialect(content: str) -> DetectionResult:
     """Detect likely dialect family and profile from raw G-code text."""
-    commands = _extract_commands(content)
+    scan_text = _strip_comments_for_scan(content)
+    commands = _extract_commands(scan_text)
     scores, reasons = _score_dialects(content, commands)
 
     best_dialect = max(scores, key=scores.get)
