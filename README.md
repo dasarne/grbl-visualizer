@@ -14,22 +14,31 @@
 
 ## Features
 
-- **Dual-view interface**: Side-by-side G-Code editor and 2D/3D canvas visualization
+- **Dual-view interface**: Side-by-side G-Code editor and interactive 3D canvas visualization
 - **Bidirectional sync**: Click a line in the editor to highlight the corresponding path on the canvas, and vice versa
-- **GRBL version selection**: Support for GRBL 1.1, 1.1H, and 1.1j with per-version command validation
+- **Multi-dialect support**: GRBL 1.1 / 1.1H / 1.1j, LinuxCNC, and Marlin with auto-detection and per-dialect command validation
+- **Syntax highlighting**: Color-coded G/M commands, axis words, arc parameters, feed rate, and comments
+- **Contextual hover tooltips**: Hover any token in the editor to see its value and any analysis issues for that line
+- **Comment browser**: Instant navigation to named operations/sections exported by CAM software
 - **Workpiece size analysis**: Automatic bounding box calculation and workpiece dimension display
 - **Coordinate origin display**: Visual indicator for the work coordinate origin
-- **Warnings and hints**: Version compatibility warnings, missing origin detection, feed rate checks
+- **Warnings and hints**: Dialect compatibility errors, missing origin detection, feed rate checks
 - **Optimization hints**: Detects redundant rapids, repeated tool changes, and other inefficiencies
+- **View cube**: Clickable orientation cube to snap to standard orthographic views
+
+## Screenshots
+
+![Loaded file with editor and 3D canvas](assets/Editing.png)
+
+![Complex engraving part in 3D view](assets/3D-PartView.png)
 
 ## Tech Stack
 
 | Component | Technology |
-|-----------|-----------|
+|-----------|------------|
 | Language  | Python 3.10+ |
 | GUI       | PyQt6 |
 | Numerics  | numpy |
-| Plotting  | matplotlib |
 | Testing   | pytest |
 
 ## Quick Start
@@ -85,9 +94,17 @@ See [DEVELOPMENT.md](DEVELOPMENT.md) for environment setup, testing, and code st
 
 ## Keyboard Shortcuts
 
-- `Ctrl+O`: Open file
-- `Ctrl+I`: Open info/about dialog
-- `Ctrl+Q`: Quit
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+N` | New window |
+| `Ctrl+O` | Open file |
+| `Ctrl+S` | Save file |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` | Redo |
+| `Ctrl+F` | Find |
+| `Ctrl+H` | Find & Replace |
+| `Ctrl+I` | Open Messages dialog |
+| `Ctrl+Q` | Quit |
 
 > **Note:** This project uses an AI-assisted development workflow where GitHub Copilot coding agent implements features described in structured issues, guided by skills and architecture documents.
 
