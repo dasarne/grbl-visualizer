@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 from ..gcode.commands import ALL_COMMANDS
-from ..gcode.grbl_versions import get_version
+from ..gcode.dialects import get_profile
 from ..geometry.bounds import (
     calculate_bounds,
     calculate_z_travel_range,
@@ -68,21 +68,22 @@ class GCodeAnalyzer:
         GRBL 1.1H).
         """
         warnings: list[AnalysisWarning] = []
-        version = get_version(self.version_id)
+        profile = get_profile(self.version_id)
+        known_commands = ALL_COMMANDS if profile.family == "grbl" else profile.known_commands
 
         for gcode_line in program.lines:
             cmd = gcode_line.command
             if cmd is None:
                 continue
 
-            if cmd not in ALL_COMMANDS:
+            if cmd not in known_commands:
                 warnings.append(AnalysisWarning(
                     severity=WarningSeverity.ERROR,
                     message=f"{cmd} is not supported by GRBL",
                     line_number=gcode_line.line_number,
                     suggestion="Remove or replace with a GRBL-compatible command.",
                 ))
-            elif cmd in version.unsupported_commands:
+            elif cmd in profile.unsupported_commands:
                 warnings.append(AnalysisWarning(
                     severity=WarningSeverity.WARNING,
                     message=f"{cmd} is not supported by GRBL {self.version_id}",

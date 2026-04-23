@@ -150,20 +150,21 @@ class GCodeParser:
           firmware variant (e.g. G38.2 probing on GRBL 1.1H).
         """
         from ..gcode.commands import ALL_COMMANDS
-        from ..gcode.grbl_versions import get_version
+        from ..gcode.dialects import get_profile
 
         warnings: list[str] = []
-        version = get_version(self.version_id)
+        profile = get_profile(self.version_id)
+        known_commands = ALL_COMMANDS if profile.family == "grbl" else profile.known_commands
 
         for line in program.lines:
             cmd = line.command
             if cmd is None:
                 continue
-            if cmd not in ALL_COMMANDS:
+            if cmd not in known_commands:
                 warnings.append(
                     f"Line {line.line_number}: {cmd} is not a recognised GRBL command."
                 )
-            elif cmd in version.unsupported_commands:
+            elif cmd in profile.unsupported_commands:
                 warnings.append(
                     f"Line {line.line_number}: {cmd} is not supported by GRBL {self.version_id}."
                 )

@@ -19,3 +19,8 @@ try:
     from .tokens import GCodeTokenizer
 except ImportError:
     pass
+
+try:
+    from .dialects import DialectProfile, get_profile, list_profiles
+except ImportError:
+    pass
