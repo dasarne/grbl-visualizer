@@ -40,27 +40,25 @@ _SEARCH_MATCH_COLOR = "#CCF5CC"
 
 
 class _GCodeSyntaxHighlighter(QSyntaxHighlighter):
-    """Syntax highlighter for G-code commands and axis words."""
+    """Syntax highlighter for G-code commands, axis words, and comments."""
 
     def __init__(self, document) -> None:
         super().__init__(document)
 
+        _ci = QRegularExpression.PatternOption.CaseInsensitiveOption
+
         self._cmd_re = QRegularExpression(
-            r"^\s*(?:N\d+\s+)?([GMT]\d+(?:\.\d+)?)",
-            QRegularExpression.PatternOption.CaseInsensitiveOption,
+            r"^\s*(?:N\d+\s+)?([GMT]\d+(?:\.\d+)?)", _ci,
         )
-        self._x_re = QRegularExpression(
-            r"\bX[-+]?\d*\.?\d+\b",
-            QRegularExpression.PatternOption.CaseInsensitiveOption,
-        )
-        self._y_re = QRegularExpression(
-            r"\bY[-+]?\d*\.?\d+\b",
-            QRegularExpression.PatternOption.CaseInsensitiveOption,
-        )
-        self._z_re = QRegularExpression(
-            r"\bZ[-+]?\d*\.?\d+\b",
-            QRegularExpression.PatternOption.CaseInsensitiveOption,
-        )
+        self._x_re  = QRegularExpression(r"\bX[-+]?\d*\.?\d+\b", _ci)
+        self._y_re  = QRegularExpression(r"\bY[-+]?\d*\.?\d+\b", _ci)
+        self._z_re  = QRegularExpression(r"\bZ[-+]?\d*\.?\d+\b", _ci)
+        self._ij_re = QRegularExpression(r"\b[IJ][-+]?\d*\.?\d+\b", _ci)
+        self._f_re  = QRegularExpression(r"\bF[-+]?\d*\.?\d+\b", _ci)
+        # Parenthetical comment: ( ... )
+        self._paren_comment_re = QRegularExpression(r"\([^)]*\)")
+        # Semicolon comment: ; to end of line
+        self._semi_comment_re  = QRegularExpression(r";.*$")
 
         self._cmd_fmt = QTextCharFormat()
         self._cmd_fmt.setForeground(QColor("#0B3D91"))
@@ -75,16 +73,33 @@ class _GCodeSyntaxHighlighter(QSyntaxHighlighter):
         self._z_fmt = QTextCharFormat()
         self._z_fmt.setForeground(QColor("#3366CC"))
 
+        self._ij_fmt = QTextCharFormat()
+        self._ij_fmt.setForeground(QColor("#CC6600"))
+
+        self._f_fmt = QTextCharFormat()
+        self._f_fmt.setForeground(QColor("#9933CC"))
+
+        self._comment_fmt = QTextCharFormat()
+        self._comment_fmt.setForeground(QColor("#6A9955"))
+        self._comment_fmt.setFontWeight(QFont.Weight.Bold)
+
     def highlightBlock(self, text: str) -> None:
+        # Commands first (highest visual priority)
         cmd_match = self._cmd_re.match(text)
         if cmd_match.hasMatch():
             start = cmd_match.capturedStart(1)
             length = cmd_match.capturedLength(1)
             self.setFormat(start, length, self._cmd_fmt)
 
-        self._apply_regex(text, self._x_re, self._x_fmt)
-        self._apply_regex(text, self._y_re, self._y_fmt)
-        self._apply_regex(text, self._z_re, self._z_fmt)
+        self._apply_regex(text, self._x_re,  self._x_fmt)
+        self._apply_regex(text, self._y_re,  self._y_fmt)
+        self._apply_regex(text, self._z_re,  self._z_fmt)
+        self._apply_regex(text, self._ij_re, self._ij_fmt)
+        self._apply_regex(text, self._f_re,  self._f_fmt)
+
+        # Comments last — override everything they cover
+        self._apply_regex(text, self._paren_comment_re, self._comment_fmt)
+        self._apply_regex(text, self._semi_comment_re,  self._comment_fmt)
 
     def _apply_regex(
         self,
