@@ -33,11 +33,18 @@ from ..geometry.path import build_toolpath
 class MainWindow(QMainWindow):
     """Dual-view main window: G-Code editor + visualization canvas."""
 
+    _DIALECT_PROFILE_KEY = "dialect/profile"
+    _LEGACY_GRBL_VERSION_KEY = "grbl/version"
+
     def __init__(self) -> None:
         super().__init__()
         self._settings = QSettings("dasarne", "GCodeLisa")
         self._language = self._settings.value("ui/language", "de", str)
-        self._current_version = self._settings.value("grbl/version", DEFAULT_VERSION, str)
+        self._current_version = self._settings.value(
+            self._DIALECT_PROFILE_KEY,
+            self._settings.value(self._LEGACY_GRBL_VERSION_KEY, DEFAULT_VERSION, str),
+            str,
+        )
         self._auto_detect_profile = self._settings.value("dialect/auto_detect", False, bool)
         self._mouse_nav_style = self._settings.value("ui/mouse_navigation", NAV_STYLE_CAD, str)
         self._recent_files: list[str] = list(
@@ -274,7 +281,7 @@ class MainWindow(QMainWindow):
         self._auto_detect_profile = dialog.get_auto_detect_dialect()
         self._language = dialog.get_selected_language()
         self._mouse_nav_style = dialog.get_selected_mouse_nav_style()
-        self._settings.setValue("grbl/version", self._current_version)
+        self._settings.setValue(self._DIALECT_PROFILE_KEY, self._current_version)
         self._settings.setValue("dialect/auto_detect", self._auto_detect_profile)
         self._settings.setValue("ui/language", self._language)
         self._settings.setValue("ui/mouse_navigation", self._mouse_nav_style)
