@@ -159,6 +159,7 @@ class EditorPanel(QWidget):
         self._search_matches: list[tuple[int, int]] = []
         self._multi_selected_lines: set[int] = set()
         self._selection_anchor_line: int | None = None
+        self._selection_last_action_from_mouse = False
         self._suppress_cursor_events = False
         self._suppress_text_change = False
         self._managed_search_edit = False
@@ -208,6 +209,7 @@ class EditorPanel(QWidget):
                 line_number = cursor.blockNumber() + 1
                 anchor = self._selection_anchor_line if self._selection_anchor_line is not None else line_number
                 self._multi_selected_lines = set(range(min(anchor, line_number), max(anchor, line_number) + 1))
+                self._selection_last_action_from_mouse = True
                 self._suppress_cursor_events = True
                 self._text_edit.setTextCursor(cursor)
                 self._suppress_cursor_events = False
@@ -253,9 +255,18 @@ class EditorPanel(QWidget):
             self._suppress_cursor_events = True
             self._text_edit.setTextCursor(cursor)
             self._suppress_cursor_events = False
+            self._selection_last_action_from_mouse = True
             self._apply_extra_selections(cursor)
             self.lines_selected.emit(sorted(self._multi_selected_lines))
             return True  # block native character-level selection
+
+        if (
+            obj is self._text_edit.viewport()
+            and event.type() == QEvent.Type.MouseButtonRelease
+            and isinstance(event, QMouseEvent)
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            return True
 
         # Double-click: treat as single-line select (block native word selection).
         if (
@@ -271,6 +282,7 @@ class EditorPanel(QWidget):
             self._suppress_cursor_events = True
             self._text_edit.setTextCursor(cursor)
             self._suppress_cursor_events = False
+            self._selection_last_action_from_mouse = True
             self._apply_extra_selections(cursor)
             self.lines_selected.emit(sorted(self._multi_selected_lines))
             return True
@@ -287,6 +299,7 @@ class EditorPanel(QWidget):
             total = doc.blockCount()
             self._multi_selected_lines = set(range(1, total + 1))
             self._selection_anchor_line = 1
+            self._selection_last_action_from_mouse = False
             self._apply_extra_selections()
             self.lines_selected.emit(sorted(self._multi_selected_lines))
             return True
@@ -316,9 +329,18 @@ class EditorPanel(QWidget):
             # Printable character → replace selected lines with that character.
             text = event.text()
             if text and text.isprintable() and not bool(mods & Qt.KeyboardModifier.ControlModifier):
+                first_line = min(self._multi_selected_lines)
                 self._delete_multi_selected_lines()
-                # Fall through so QTextEdit inserts the character normally.
-                return False
+                doc = self._text_edit.document()
+                block = doc.findBlockByLineNumber(max(0, first_line - 1))
+                insert_cursor = self._text_edit.textCursor()
+                if block.isValid():
+                    insert_cursor.setPosition(block.position())
+                self._suppress_cursor_events = True
+                self._text_edit.setTextCursor(insert_cursor)
+                self._suppress_cursor_events = False
+                self._text_edit.insertPlainText(text)
+                return True
 
         return super().eventFilter(obj, event)
 
@@ -332,6 +354,7 @@ class EditorPanel(QWidget):
         self._search_scope = None
         self._search_matches = []
         self._multi_selected_lines.clear()
+        self._selection_anchor_line = None
         self._apply_extra_selections()
         self._suppress_text_change = False
 
@@ -368,6 +391,7 @@ class EditorPanel(QWidget):
         """Highlight a non-contiguous set of 1-based line numbers."""
         if not line_numbers:
             self._multi_selected_lines.clear()
+            self._selection_anchor_line = None
             self._apply_extra_selections()
             return
         if len(line_numbers) == 1:
@@ -418,6 +442,7 @@ class EditorPanel(QWidget):
         self._suppress_cursor_events = False
 
         self._multi_selected_lines.clear()
+        self._selection_anchor_line = None
         self._search_scope = None
         self._search_matches = []
         self._apply_extra_selections()
@@ -1158,6 +1183,13 @@ class EditorPanel(QWidget):
         cursor = self._text_edit.textCursor()
         line_number = cursor.blockNumber() + 1
         self._selected_line = line_number
+
+        if self._selection_last_action_from_mouse:
+            self._selection_last_action_from_mouse = False
+            self._apply_extra_selections(cursor)
+            self.line_selected.emit(line_number)
+            self.lines_selected.emit(sorted(self._multi_selected_lines))
+            return
 
         # Keyboard navigation: update line-level multi-select based on modifiers.
         # (Mouse-driven cursor moves are handled in eventFilter and suppressed here.)

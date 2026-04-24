@@ -92,6 +92,27 @@ Lines with analysis issues are highlighted in the editor background. Hover the m
 
 The tooltip shows the value of the token (e.g. *X-Koordinate: 42.415*) and any analysis warnings that apply to that line.
 
+### Line Selection (Editor + Canvas Sync)
+
+Selection is line-based and unified across editor, search scope, and canvas highlighting.
+
+| Interaction | Result |
+|-------------|--------|
+| Click | Select one line and set the anchor |
+| Shift+Click | Select a contiguous range from anchor to clicked line |
+| Ctrl+Click | Toggle individual lines (non-contiguous multi-select) |
+| Drag with left mouse button | Extend the selection range while dragging |
+| Shift+Arrow | Extend a contiguous range from anchor |
+| Arrow | Move to a single-line selection |
+| Ctrl+A | Select all lines |
+| Ctrl+C / Ctrl+X | Copy / cut selected lines |
+| Delete / Backspace | Delete selected lines |
+| Type printable text | Replace selected lines with typed text |
+
+Double-click is intentionally treated like single-line selection (no word-level selection mode).
+
+When lines are selected, editor and canvas remain synchronized.
+
 ### Find & Replace
 
 Open Find & Replace with `Ctrl+F` or `Ctrl+H`. Type in the search field and use the buttons to navigate matches or replace them one by one / all at once.
@@ -175,7 +196,10 @@ Use the **filter drop-down** (All / Error / Warning / Info) and the **text searc
 | `Ctrl+S` | Save file |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` | Redo |
-| `Ctrl+C` | Copy selection |
+| `Ctrl+A` | Select all lines |
+| `Ctrl+C` | Copy selected lines |
+| `Ctrl+X` | Cut selected lines |
+| `Delete` / `Backspace` | Delete selected lines |
 | `Ctrl+V` | Paste |
 | `Ctrl+F` | Find |
 | `Ctrl+H` | Find & Replace |
