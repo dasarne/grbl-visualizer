@@ -43,7 +43,7 @@ _CMD_TOKEN_RE = re.compile(r"\b([GMT]\d+(?:\.\d+)?)\b", re.IGNORECASE)
 _PARAM_TOKEN_RE = re.compile(r"\b([A-Z])([-+]?\d*\.?\d+)\b", re.IGNORECASE)
 _PAREN_COMMENT_RE = re.compile(r"\([^)]*\)")
 
-_PARAM_EXPLANATIONS: dict[str, str] = {
+_PARAM_EXPLANATIONS_DE: dict[str, str] = {
     "X": "X-Koordinate",
     "Y": "Y-Koordinate",
     "Z": "Z-Koordinate",
@@ -53,6 +53,18 @@ _PARAM_EXPLANATIONS: dict[str, str] = {
     "I": "Relativer Kreismittelpunkt I (X-Anteil)",
     "J": "Relativer Kreismittelpunkt J (Y-Anteil)",
     "F": "Vorschub",
+}
+
+_PARAM_EXPLANATIONS_EN: dict[str, str] = {
+    "X": "X coordinate",
+    "Y": "Y coordinate",
+    "Z": "Z coordinate",
+    "A": "A axis (multi-axis system)",
+    "B": "B axis (multi-axis system)",
+    "C": "C axis (multi-axis system)",
+    "I": "Arc centre offset I (X component)",
+    "J": "Arc centre offset J (Y component)",
+    "F": "Feed rate",
 }
 
 
@@ -139,6 +151,7 @@ class EditorPanel(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._language = "de"
         self._selected_line: int | None = None
         self._warning_severity: dict[int, WarningSeverity] = {}
         self._line_warnings: dict[int, list[AnalysisWarning]] = {}
@@ -149,6 +162,9 @@ class EditorPanel(QWidget):
         self._suppress_text_change = False
         self._managed_search_edit = False
         self._setup_ui()
+
+    def set_language(self, language: str) -> None:
+        self._language = language
 
     def _setup_ui(self) -> None:
         """Build the editor layout."""
@@ -392,27 +408,32 @@ class EditorPanel(QWidget):
         if not line_text:
             return None
 
+        de = self._language != "en"
+
         semicolon_idx = line_text.find(";")
         if semicolon_idx >= 0 and column >= semicolon_idx:
             comment = line_text[semicolon_idx + 1:].strip()
-            comment_text = comment if comment else "(leer)"
-            return f"Kommentar: {comment_text}"
+            comment_text = comment if comment else ("(leer)" if de else "(empty)")
+            label = "Kommentar" if de else "Comment"
+            return f"{label}: {comment_text}"
 
         for match in _PAREN_COMMENT_RE.finditer(line_text):
             start, end = match.span()
             if start <= column < end:
                 comment = match.group(0)[1:-1].strip()
-                comment_text = comment if comment else "(leer)"
-                return f"Kommentar: {comment_text}"
+                comment_text = comment if comment else ("(leer)" if de else "(empty)")
+                label = "Kommentar" if de else "Comment"
+                return f"{label}: {comment_text}"
 
         for match in _CMD_TOKEN_RE.finditer(line_text):
             start, end = match.span(1)
             if start <= column < end:
                 command = match.group(1).upper()
                 description = ALL_COMMANDS.get(command)
+                cmd_label = "Befehl" if de else "Command"
                 if description:
-                    return f"Befehl {command}: {description}"
-                return f"Befehl {command}"
+                    return f"{cmd_label} {command}: {description}"
+                return f"{cmd_label} {command}"
 
         for match in _PARAM_TOKEN_RE.finditer(line_text):
             start, end = match.span(0)
@@ -425,14 +446,16 @@ class EditorPanel(QWidget):
 
     def _format_parameter_tooltip(self, key: str, raw_value: str) -> str:
         """Format tooltip text for a parameter token."""
-        description = _PARAM_EXPLANATIONS.get(key, f"{key}-Parameter")
+        de = self._language != "en"
+        explanations = _PARAM_EXPLANATIONS_DE if de else _PARAM_EXPLANATIONS_EN
+        description = explanations.get(key, f"{key}-Parameter" if de else f"{key} parameter")
         try:
             value = float(raw_value)
         except ValueError:
             value_text = raw_value
         else:
             if key == "F":
-                value_text = f"{value:.2f} Einheit/min"
+                value_text = f"{value:.2f} " + ("Einheit/min" if de else "units/min")
             elif key in {"X", "Y", "Z", "I", "J", "A", "B", "C"}:
                 value_text = f"{value:.3f}"
             else:
@@ -445,16 +468,21 @@ class EditorPanel(QWidget):
         if not warnings:
             return None
 
-        parts: list[str] = ["Analysehinweise:"]
+        de = self._language != "en"
+        header = "Analysehinweise:" if de else "Analysis notes:"
+        parts: list[str] = [header]
         for warning in warnings[:3]:
             parts.append(f"- {warning.severity.name}: {warning.message}")
             if warning.severity == WarningSeverity.ERROR:
-                parts.append(f"  Grund: {warning.message}")
+                reason_label = "Grund" if de else "Reason"
+                parts.append(f"  {reason_label}: {warning.message}")
             if warning.suggestion:
-                parts.append(f"  Vorschlag: {warning.suggestion}")
+                suggestion_label = "Vorschlag" if de else "Suggestion"
+                parts.append(f"  {suggestion_label}: {warning.suggestion}")
 
         if len(warnings) > 3:
-            parts.append(f"- ... {len(warnings) - 3} weitere Hinweise")
+            more = len(warnings) - 3
+            parts.append(f"- ... {more} weitere Hinweise" if de else f"- ... {more} more notes")
 
         return "\n".join(parts)
 

@@ -397,6 +397,7 @@ class MainWindow(QMainWindow):
         self._refresh_status_profile_combo()
         self._canvas_panel.set_language(self._language)
         self._comment_panel.set_language(self._language)
+        self._editor_panel.set_language(self._language)
 
     def _on_editor_content_changed(self, content: str) -> None:
         self._loaded_content = content
@@ -645,6 +646,7 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         self._canvas_panel.set_language(self._language)
         self._comment_panel.set_language(self._language)
+        self._editor_panel.set_language(self._language)
 
     def _update_issues_button(self, total: int, errors: int, warnings: int, infos: int) -> None:
         if self._issues_button is None:

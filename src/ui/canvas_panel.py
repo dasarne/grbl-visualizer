@@ -1297,6 +1297,9 @@ class CanvasPanel(QWidget):
         self._language = language
         if self._warnings_dialog is not None:
             self._warnings_dialog.set_language(self._language)
+        tooltip_de = "Ansichtswürfel: Fläche klicken für Standardansicht"
+        tooltip_en = "View cube: click a face to switch to a standard view"
+        self._view_cube.setToolTip(tooltip_de if language == "de" else tooltip_en)
 
     def show_warning_dialog(self) -> None:
         """Show floating warnings dialog and keep it in sync."""
