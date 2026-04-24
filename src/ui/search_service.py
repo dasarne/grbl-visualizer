@@ -12,6 +12,7 @@ def compute_match_ranges(
     use_regex: bool,
     content: str,
     ranges: list[TextRange],
+    case_sensitive: bool = False,
 ) -> list[TextRange]:
     """Return all match ranges within the given text ranges."""
     if not term:
@@ -20,8 +21,11 @@ def compute_match_ranges(
     results: list[TextRange] = []
 
     if use_regex:
+        flags = re.MULTILINE
+        if not case_sensitive:
+            flags |= re.IGNORECASE
         try:
-            pattern = re.compile(term, re.MULTILINE)
+            pattern = re.compile(term, flags)
         except re.error:
             return []
 
@@ -33,9 +37,11 @@ def compute_match_ranges(
 
     for start_bound, end_bound in ranges:
         target = content[start_bound:end_bound]
+        search_target = target if case_sensitive else target.lower()
+        search_term = term if case_sensitive else term.lower()
         start = 0
         while True:
-            index = target.find(term, start)
+            index = search_target.find(search_term, start)
             if index == -1:
                 break
             begin = start_bound + index
@@ -72,6 +78,7 @@ def replace_all_in_ranges(
     needle: str,
     replacement: str,
     use_regex: bool,
+    case_sensitive: bool = False,
 ) -> tuple[str, int]:
     """Replace all matches within ranges and return (new_content, count)."""
     if not needle:
@@ -84,15 +91,23 @@ def replace_all_in_ranges(
         for start_bound, end_bound in reversed(ranges):
             target = new_content[start_bound:end_bound]
             if use_regex:
+                flags = re.MULTILINE
+                if not case_sensitive:
+                    flags |= re.IGNORECASE
                 new_target, local_count = re.subn(
                     needle,
                     replacement,
                     target,
-                    flags=re.MULTILINE,
+                    flags=flags,
                 )
             else:
-                local_count = target.count(needle)
-                new_target = target.replace(needle, replacement)
+                if case_sensitive:
+                    local_count = target.count(needle)
+                    new_target = target.replace(needle, replacement)
+                else:
+                    # Case-insensitive literal replace preserves original case in non-matched parts
+                    local_count = target.lower().count(needle.lower())
+                    new_target, local_count = _replace_case_insensitive(target, needle, replacement)
 
             if local_count == 0:
                 continue
@@ -107,3 +122,23 @@ def replace_all_in_ranges(
         return (new_content, count)
     except re.error:
         return (content, 0)
+
+
+def _replace_case_insensitive(text: str, needle: str, replacement: str) -> tuple[str, int]:
+    """Replace all occurrences of needle in text case-insensitively."""
+    count = 0
+    result: list[str] = []
+    lower_text = text.lower()
+    lower_needle = needle.lower()
+    start = 0
+    needle_len = len(needle)
+    while True:
+        index = lower_text.find(lower_needle, start)
+        if index == -1:
+            result.append(text[start:])
+            break
+        result.append(text[start:index])
+        result.append(replacement)
+        count += 1
+        start = index + needle_len
+    return "".join(result), count

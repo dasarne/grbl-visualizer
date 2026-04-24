@@ -8,8 +8,8 @@
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/dasarne/grbl-visualizer.git
-cd grbl-visualizer
+git clone https://github.com/dasarne/grbl-visualizer.git gcode-lisa
+cd gcode-lisa
 
 # 2. Create a virtual environment (pyenv recommended)
 python3 -m venv .venv

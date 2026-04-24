@@ -398,6 +398,7 @@ class MainWindow(QMainWindow):
         self._canvas_panel.set_language(self._language)
         self._comment_panel.set_language(self._language)
         self._editor_panel.set_language(self._language)
+        self._editor_panel.set_profile_id(analysis_profile_id)
 
     def _on_editor_content_changed(self, content: str) -> None:
         self._loaded_content = content
@@ -540,8 +541,8 @@ class MainWindow(QMainWindow):
     def _on_find_replace_closed(self) -> None:
         self._editor_panel.clear_search_highlights()
 
-    def _on_search_updated(self, term: str, use_regex: bool, search_in_selection: bool) -> None:
-        found, count = self._editor_panel.preview_search(term, use_regex, search_in_selection)
+    def _on_search_updated(self, term: str, use_regex: bool, search_in_selection: bool, case_sensitive: bool) -> None:
+        found, count = self._editor_panel.preview_search(term, use_regex, search_in_selection, case_sensitive)
         if not term:
             self._find_replace_dialog.set_status("")
         elif found:
@@ -549,36 +550,36 @@ class MainWindow(QMainWindow):
         else:
             self._find_replace_dialog.set_status(self._tr("status.search_not_found").format(term=term))
 
-    def _on_find_next_requested(self, term: str, use_regex: bool, search_in_selection: bool) -> None:
-        if self._editor_panel.find_next(term, use_regex, search_in_selection):
+    def _on_find_next_requested(self, term: str, use_regex: bool, search_in_selection: bool, case_sensitive: bool) -> None:
+        if self._editor_panel.find_next(term, use_regex, search_in_selection, case_sensitive):
             count = self._editor_panel.get_search_match_count()
             self._find_replace_dialog.set_status(self._tr("status.search_matches").format(count=count))
         else:
             self._find_replace_dialog.set_status(self._tr("status.search_not_found").format(term=term))
 
-    def _on_find_previous_requested(self, term: str, use_regex: bool, search_in_selection: bool) -> None:
-        if self._editor_panel.find_previous(term, use_regex, search_in_selection):
+    def _on_find_previous_requested(self, term: str, use_regex: bool, search_in_selection: bool, case_sensitive: bool) -> None:
+        if self._editor_panel.find_previous(term, use_regex, search_in_selection, case_sensitive):
             count = self._editor_panel.get_search_match_count()
             self._find_replace_dialog.set_status(self._tr("status.search_matches").format(count=count))
         else:
             self._find_replace_dialog.set_status(self._tr("status.search_not_found").format(term=term))
 
-    def _on_replace_next_requested(self, needle: str, replacement: str, use_regex: bool, search_in_selection: bool) -> None:
-        if self._editor_panel.replace_next(needle, replacement, use_regex, search_in_selection):
+    def _on_replace_next_requested(self, needle: str, replacement: str, use_regex: bool, search_in_selection: bool, case_sensitive: bool) -> None:
+        if self._editor_panel.replace_next(needle, replacement, use_regex, search_in_selection, case_sensitive):
             self._find_replace_dialog.set_status(self._tr("status.replaced_one").format(term=needle))
             self._post_replace_refresh()
         else:
             self._find_replace_dialog.set_status(self._tr("status.search_not_found").format(term=needle))
 
-    def _on_replace_previous_requested(self, needle: str, replacement: str, use_regex: bool, search_in_selection: bool) -> None:
-        if self._editor_panel.replace_previous(needle, replacement, use_regex, search_in_selection):
+    def _on_replace_previous_requested(self, needle: str, replacement: str, use_regex: bool, search_in_selection: bool, case_sensitive: bool) -> None:
+        if self._editor_panel.replace_previous(needle, replacement, use_regex, search_in_selection, case_sensitive):
             self._find_replace_dialog.set_status(self._tr("status.replaced_one").format(term=needle))
             self._post_replace_refresh()
         else:
             self._find_replace_dialog.set_status(self._tr("status.search_not_found").format(term=needle))
 
-    def _on_replace_all_requested(self, needle: str, replacement: str, use_regex: bool, search_in_selection: bool) -> None:
-        count = self._editor_panel.replace_all(needle, replacement, use_regex, search_in_selection)
+    def _on_replace_all_requested(self, needle: str, replacement: str, use_regex: bool, search_in_selection: bool, case_sensitive: bool) -> None:
+        count = self._editor_panel.replace_all(needle, replacement, use_regex, search_in_selection, case_sensitive)
         if count > 0:
             self._find_replace_dialog.set_status(self._tr("status.replaced").format(count=count))
             self._post_replace_refresh()

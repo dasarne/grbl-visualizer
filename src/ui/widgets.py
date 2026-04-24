@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import QComboBox, QLabel, QPlainTextEdit, QWidget
 from PyQt6.QtCore import Qt, QRect, QSize
-from PyQt6.QtGui import QColor, QPainter, QPaintEvent, QResizeEvent
+from PyQt6.QtGui import QColor, QFont, QPainter, QPaintEvent, QResizeEvent
 
 from ..gcode.grbl_versions import GRBL_VERSIONS
 
@@ -75,6 +75,11 @@ class GCodeEditor(QPlainTextEdit):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        font = self.font()
+        font.setFamily("Monospace")
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setFixedPitch(True)
+        self.setFont(font)
         self._line_number_bar = LineNumberBar(self)
 
         self.blockCountChanged.connect(self._update_line_number_width)

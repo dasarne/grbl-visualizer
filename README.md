@@ -10,7 +10,7 @@
 ![PyQt6](https://img.shields.io/badge/PyQt6-6.4+-green.svg)
 ![License](https://img.shields.io/badge/license-GPL--3.0-orange.svg)
 
-> Interactive dual-view GRBL G-Code visualizer and analyzer for CNC machines under Linux/KDE
+> Interactive dual-view G-Code editor and analyzer for CNC machines under Linux/KDE
 
 ## Features
 
@@ -44,8 +44,8 @@
 ## Quick Start
 
 ```bash
-git clone https://github.com/dasarne/grbl-visualizer.git
-cd grbl-visualizer
+git clone https://github.com/dasarne/grbl-visualizer.git gcode-lisa
+cd gcode-lisa
 
 # Create and activate a virtual environment (required on Arch Linux and
 # any distribution that enforces PEP 668 / externally-managed-environment)

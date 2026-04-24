@@ -57,6 +57,48 @@ ALL_COMMANDS: dict[str, str] = {
     **COOLANT_COMMANDS,
 }
 
+# Extended descriptions covering LinuxCNC, Marlin and other common dialects.
+EXTENDED_COMMAND_DESCRIPTIONS: dict[str, str] = {
+    **ALL_COMMANDS,
+    # General / dwell
+    "G4": "Dwell (pause for specified time)",
+    "G04": "Dwell (pause for specified time)",
+    # Cutter radius compensation
+    "G40": "Cancel cutter radius compensation",
+    "G41": "Cutter radius compensation left",
+    "G42": "Cutter radius compensation right",
+    # Tool length offset
+    "G43": "Apply tool length offset",
+    "G43.1": "Dynamic tool length offset",
+    "G49": "Cancel tool length offset",
+    # Work coordinate systems
+    "G53": "Move in machine coordinates",
+    "G54": "Work coordinate system 1",
+    "G55": "Work coordinate system 2",
+    "G56": "Work coordinate system 3",
+    "G57": "Work coordinate system 4",
+    "G58": "Work coordinate system 5",
+    "G59": "Work coordinate system 6",
+    # Path control
+    "G61": "Exact path mode",
+    "G64": "Path blending mode",
+    # Program flow
+    "M1": "Optional program stop",
+    "M6": "Tool change",
+    # Marlin / 3D-printer
+    "G28": "Home all axes",
+    "G29": "Bed leveling",
+    "M82": "Extruder absolute mode",
+    "M83": "Extruder relative mode",
+    "M84": "Disable steppers",
+    "M104": "Set hotend temperature",
+    "M106": "Fan on",
+    "M107": "Fan off",
+    "M109": "Wait for hotend temperature",
+    "M140": "Set bed temperature",
+    "M190": "Wait for bed temperature",
+}
+
 
 @dataclass
 class GRBLCommand:

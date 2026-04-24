@@ -19,7 +19,8 @@ from PyQt6.QtGui import (
 from PyQt6.QtCore import QRegularExpression
 
 from ..analyzer.analyzer import AnalysisWarning, WarningSeverity
-from ..gcode.commands import ALL_COMMANDS
+from ..gcode.commands import EXTENDED_COMMAND_DESCRIPTIONS
+from ..gcode.dialects import get_profile
 from .search_service import (
     compute_match_ranges,
     find_next_match,
@@ -73,6 +74,8 @@ class _GCodeSyntaxHighlighter(QSyntaxHighlighter):
 
     def __init__(self, document) -> None:
         super().__init__(document)
+        # Commands known to the active dialect profile (None = accept any command)
+        self._known_commands: set[str] | None = None
 
         _ci = QRegularExpression.PatternOption.CaseInsensitiveOption
 
@@ -93,6 +96,12 @@ class _GCodeSyntaxHighlighter(QSyntaxHighlighter):
         self._cmd_fmt.setForeground(QColor("#0B3D91"))
         self._cmd_fmt.setFontWeight(QFont.Weight.Bold)
 
+        # Unknown / unsupported command in the active dialect
+        self._cmd_unknown_fmt = QTextCharFormat()
+        self._cmd_unknown_fmt.setForeground(QColor("#AA3300"))
+        self._cmd_unknown_fmt.setFontWeight(QFont.Weight.Bold)
+        self._cmd_unknown_fmt.setFontUnderline(True)
+
         self._x_fmt = QTextCharFormat()
         self._x_fmt.setForeground(QColor("#CC3333"))
 
@@ -112,13 +121,30 @@ class _GCodeSyntaxHighlighter(QSyntaxHighlighter):
         self._comment_fmt.setForeground(QColor("#6A9955"))
         self._comment_fmt.setFontWeight(QFont.Weight.Bold)
 
+    def update_profile(self, profile_id: str | None) -> None:
+        """Set the active dialect profile; rehighlights all blocks."""
+        if profile_id is None:
+            self._known_commands = None
+        else:
+            try:
+                profile = get_profile(profile_id)
+                self._known_commands = {c.upper() for c in profile.known_commands}
+            except ValueError:
+                self._known_commands = None
+        self.rehighlight()
+
     def highlightBlock(self, text: str) -> None:
         # Commands first (highest visual priority)
         cmd_match = self._cmd_re.match(text)
         if cmd_match.hasMatch():
             start = cmd_match.capturedStart(1)
             length = cmd_match.capturedLength(1)
-            self.setFormat(start, length, self._cmd_fmt)
+            command = cmd_match.captured(1).upper()
+            if self._known_commands is not None and command not in self._known_commands:
+                fmt = self._cmd_unknown_fmt
+            else:
+                fmt = self._cmd_fmt
+            self.setFormat(start, length, fmt)
 
         self._apply_regex(text, self._x_re,  self._x_fmt)
         self._apply_regex(text, self._y_re,  self._y_fmt)
@@ -152,6 +178,7 @@ class EditorPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._language = "de"
+        self._profile_id: str | None = None
         self._selected_line: int | None = None
         self._warning_severity: dict[int, WarningSeverity] = {}
         self._line_warnings: dict[int, list[AnalysisWarning]] = {}
@@ -174,6 +201,11 @@ class EditorPanel(QWidget):
 
     def set_language(self, language: str) -> None:
         self._language = language
+
+    def set_profile_id(self, profile_id: str | None) -> None:
+        """Update the active dialect profile and refresh syntax highlighting."""
+        self._profile_id = profile_id
+        self._syntax.update_profile(profile_id)
 
     def _setup_ui(self) -> None:
         """Build the editor layout."""
@@ -561,11 +593,34 @@ class EditorPanel(QWidget):
             start, end = match.span(1)
             if start <= column < end:
                 command = match.group(1).upper()
-                description = ALL_COMMANDS.get(command)
+                description = EXTENDED_COMMAND_DESCRIPTIONS.get(command)
                 cmd_label = "Befehl" if de else "Command"
+                parts: list[str] = []
                 if description:
-                    return f"{cmd_label} {command}: {description}"
-                return f"{cmd_label} {command}"
+                    parts.append(f"{cmd_label} {command}: {description}")
+                else:
+                    parts.append(f"{cmd_label} {command}")
+                # Add dialect support hint when a profile is active
+                if self._profile_id is not None:
+                    try:
+                        profile = get_profile(self._profile_id)
+                        if command in profile.unsupported_commands:
+                            hint = (
+                                f"⚠ Nicht unterstützt durch {profile.name}"
+                                if de else
+                                f"⚠ Not supported by {profile.name}"
+                            )
+                            parts.append(hint)
+                        elif command not in profile.known_commands:
+                            hint = (
+                                f"⚠ Unbekannt für Dialekt {profile.name}"
+                                if de else
+                                f"⚠ Unknown for dialect {profile.name}"
+                            )
+                            parts.append(hint)
+                    except ValueError:
+                        pass
+                return "\n".join(parts)
 
         for match in _PARAM_TOKEN_RE.finditer(line_text):
             start, end = match.span(0)
@@ -687,7 +742,7 @@ class EditorPanel(QWidget):
         self._search_matches = []
         self._apply_extra_selections()
 
-    def find_next(self, term: str, use_regex: bool = False, search_in_selection: bool = False) -> bool:
+    def find_next(self, term: str, use_regex: bool = False, search_in_selection: bool = False, case_sensitive: bool = False) -> bool:
         """Find next occurrence with optional regex support and wrap-around."""
         if not term:
             self._search_matches = []
@@ -695,7 +750,7 @@ class EditorPanel(QWidget):
             return False
         cursor = self._text_edit.textCursor()
         self._update_search_scope(cursor, search_in_selection)
-        self._update_search_matches(term, use_regex, cursor, search_in_selection)
+        self._update_search_matches(term, use_regex, cursor, search_in_selection, case_sensitive)
         if not self._search_matches:
             return False
 
@@ -706,7 +761,7 @@ class EditorPanel(QWidget):
         self._select_range(*match)
         return True
 
-    def find_previous(self, term: str, use_regex: bool = False, search_in_selection: bool = False) -> bool:
+    def find_previous(self, term: str, use_regex: bool = False, search_in_selection: bool = False, case_sensitive: bool = False) -> bool:
         """Find previous occurrence with optional regex support and wrap-around."""
         if not term:
             self._search_matches = []
@@ -714,7 +769,7 @@ class EditorPanel(QWidget):
             return False
         cursor = self._text_edit.textCursor()
         self._update_search_scope(cursor, search_in_selection)
-        self._update_search_matches(term, use_regex, cursor, search_in_selection)
+        self._update_search_matches(term, use_regex, cursor, search_in_selection, case_sensitive)
         if not self._search_matches:
             return False
 
@@ -734,6 +789,7 @@ class EditorPanel(QWidget):
         term: str,
         use_regex: bool = False,
         search_in_selection: bool = False,
+        case_sensitive: bool = False,
     ) -> tuple[bool, int]:
         """Incremental search preview: keep match selected and return hit count."""
         cursor = self._text_edit.textCursor()
@@ -767,7 +823,7 @@ class EditorPanel(QWidget):
             self._apply_extra_selections()
             return (False, 0)
 
-        self._search_matches = compute_match_ranges(term, use_regex, content, ranges)
+        self._search_matches = compute_match_ranges(term, use_regex, content, ranges, case_sensitive)
         self._apply_extra_selections()
         count = len(self._search_matches)
         # Do not move the text cursor during incremental preview typing.
@@ -780,14 +836,15 @@ class EditorPanel(QWidget):
         replacement: str,
         use_regex: bool = False,
         search_in_selection: bool = False,
+        case_sensitive: bool = False,
     ) -> bool:
         """Replace next occurrence and move to next. Returns True if replacement made."""
         if not needle:
             return False
         cursor = self._text_edit.textCursor()
         if use_regex:
-            return self._replace_regex_next(needle, replacement, cursor, search_in_selection)
-        if not self.find_next(needle, use_regex=False, search_in_selection=search_in_selection):
+            return self._replace_regex_next(needle, replacement, cursor, search_in_selection, case_sensitive)
+        if not self.find_next(needle, use_regex=False, search_in_selection=search_in_selection, case_sensitive=case_sensitive):
             return False
         cursor = self._text_edit.textCursor()
         match_start = cursor.selectionStart()
@@ -810,15 +867,16 @@ class EditorPanel(QWidget):
         replacement: str,
         use_regex: bool = False,
         search_in_selection: bool = False,
+        case_sensitive: bool = False,
     ) -> bool:
         """Replace previous occurrence and move to previous. Returns True if replacement made."""
         if not needle:
             return False
         cursor = self._text_edit.textCursor()
         if use_regex:
-            return self._replace_regex_previous(needle, replacement, cursor, search_in_selection)
+            return self._replace_regex_previous(needle, replacement, cursor, search_in_selection, case_sensitive)
         if not self._selection_matches_query(cursor, needle, use_regex=False):
-            if not self.find_previous(needle, use_regex=False, search_in_selection=search_in_selection):
+            if not self.find_previous(needle, use_regex=False, search_in_selection=search_in_selection, case_sensitive=case_sensitive):
                 return False
             cursor = self._text_edit.textCursor()
         match_start = cursor.selectionStart()
@@ -834,7 +892,7 @@ class EditorPanel(QWidget):
         finally:
             self._managed_search_edit = False
         self._move_cursor_to_position(match_start)
-        self.find_previous(needle, use_regex=False, search_in_selection=search_in_selection)
+        self.find_previous(needle, use_regex=False, search_in_selection=search_in_selection, case_sensitive=case_sensitive)
         return True
 
     def replace_all(
@@ -843,6 +901,7 @@ class EditorPanel(QWidget):
         replacement: str,
         use_regex: bool = False,
         search_in_selection: bool = False,
+        case_sensitive: bool = False,
     ) -> int:
         """Replace all occurrences and return replacement count."""
         if not needle:
@@ -861,6 +920,7 @@ class EditorPanel(QWidget):
             needle,
             replacement,
             use_regex,
+            case_sensitive,
         )
         if count == 0:
             return 0
@@ -999,13 +1059,17 @@ class EditorPanel(QWidget):
         replacement: str,
         cursor: QTextCursor,
         search_in_selection: bool,
+        case_sensitive: bool = False,
     ) -> bool:
         """Replace next regex match and move cursor."""
+        flags = re.MULTILINE
+        if not case_sensitive:
+            flags |= re.IGNORECASE
         try:
-            regex = re.compile(pattern, re.MULTILINE)
+            regex = re.compile(pattern, flags)
         except re.error:
             return False
-        if not self.find_next(pattern, use_regex=True, search_in_selection=search_in_selection):
+        if not self.find_next(pattern, use_regex=True, search_in_selection=search_in_selection, case_sensitive=case_sensitive):
             return False
         cursor = self._text_edit.textCursor()
         match_text = cursor.selectedText()
@@ -1030,14 +1094,18 @@ class EditorPanel(QWidget):
         replacement: str,
         cursor: QTextCursor,
         search_in_selection: bool,
+        case_sensitive: bool = False,
     ) -> bool:
         """Replace previous regex match and move cursor."""
+        flags = re.MULTILINE
+        if not case_sensitive:
+            flags |= re.IGNORECASE
         try:
-            regex = re.compile(pattern, re.MULTILINE)
+            regex = re.compile(pattern, flags)
         except re.error:
             return False
         if not self._selection_matches_query(cursor, pattern, use_regex=True):
-            if not self.find_previous(pattern, use_regex=True, search_in_selection=search_in_selection):
+            if not self.find_previous(pattern, use_regex=True, search_in_selection=search_in_selection, case_sensitive=case_sensitive):
                 return False
             cursor = self._text_edit.textCursor()
         match_text = cursor.selectedText()
@@ -1055,7 +1123,7 @@ class EditorPanel(QWidget):
         finally:
             self._managed_search_edit = False
         self._move_cursor_to_position(match_start)
-        self.find_previous(pattern, use_regex=True, search_in_selection=search_in_selection)
+        self.find_previous(pattern, use_regex=True, search_in_selection=search_in_selection, case_sensitive=case_sensitive)
         return True
 
     def _move_cursor_to_position(self, position: int) -> None:
@@ -1183,8 +1251,9 @@ class EditorPanel(QWidget):
         use_regex: bool,
         content: str,
         bounds: tuple[int, int],
+        case_sensitive: bool = False,
     ) -> int:
-        return len(compute_match_ranges(term, use_regex, content, [bounds]))
+        return len(compute_match_ranges(term, use_regex, content, [bounds], case_sensitive))
 
     def _update_search_matches(
         self,
@@ -1192,6 +1261,7 @@ class EditorPanel(QWidget):
         use_regex: bool,
         cursor: QTextCursor,
         search_in_selection: bool,
+        case_sensitive: bool = False,
     ) -> None:
         content = self.get_content()
         ranges = self._get_search_ranges(content, cursor, search_in_selection)
@@ -1199,7 +1269,7 @@ class EditorPanel(QWidget):
             self._search_matches = []
             self._apply_extra_selections(cursor)
             return
-        self._search_matches = compute_match_ranges(term, use_regex, content, ranges)
+        self._search_matches = compute_match_ranges(term, use_regex, content, ranges, case_sensitive)
         self._apply_extra_selections(cursor)
 
     def _compute_match_ranges(
@@ -1208,8 +1278,9 @@ class EditorPanel(QWidget):
         use_regex: bool,
         content: str,
         ranges: list[tuple[int, int]],
+        case_sensitive: bool = False,
     ) -> list[tuple[int, int]]:
-        return compute_match_ranges(term, use_regex, content, ranges)
+        return compute_match_ranges(term, use_regex, content, ranges, case_sensitive)
 
     def _select_range(self, start: int, end: int) -> None:
         new_cursor = self._text_edit.textCursor()

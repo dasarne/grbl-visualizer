@@ -32,6 +32,27 @@ def test_compute_match_ranges_invalid_regex_returns_empty() -> None:
     assert matches == []
 
 
+def test_compute_match_ranges_case_insensitive_default() -> None:
+    content = "G0 X10\ng1 Y20\n"
+    ranges = [(0, len(content))]
+
+    # Default: case_sensitive=False – should match both "G0" and "g0"
+    matches = compute_match_ranges("g0", use_regex=False, content=content, ranges=ranges, case_sensitive=False)
+    assert len(matches) == 1
+
+    # With case_sensitive=True – "g0" does NOT match "G0"
+    matches_cs = compute_match_ranges("g0", use_regex=False, content=content, ranges=ranges, case_sensitive=True)
+    assert matches_cs == []
+
+
+def test_compute_match_ranges_case_sensitive() -> None:
+    content = "G1 g1\n"
+    ranges = [(0, len(content))]
+
+    matches = compute_match_ranges("G1", use_regex=False, content=content, ranges=ranges, case_sensitive=True)
+    assert matches == [(0, 2)]
+
+
 def test_find_next_previous_match_wraparound() -> None:
     matches = [(10, 12), (20, 22), (30, 32)]
 
@@ -53,6 +74,36 @@ def test_replace_all_in_ranges_literal() -> None:
 
     assert count == 2
     assert new_content == "X10 S100\nX20 S200\n"
+
+
+def test_replace_all_in_ranges_case_insensitive_literal() -> None:
+    content = "F100\nf200\n"
+    new_content, count = replace_all_in_ranges(
+        content,
+        ranges=[(0, len(content))],
+        needle="f",
+        replacement="S",
+        use_regex=False,
+        case_sensitive=False,
+    )
+
+    assert count == 2
+    assert new_content == "S100\nS200\n"
+
+
+def test_replace_all_in_ranges_case_sensitive_literal() -> None:
+    content = "F100\nf200\n"
+    new_content, count = replace_all_in_ranges(
+        content,
+        ranges=[(0, len(content))],
+        needle="f",
+        replacement="S",
+        use_regex=False,
+        case_sensitive=True,
+    )
+
+    assert count == 1
+    assert new_content == "F100\nS200\n"
 
 
 def test_replace_all_in_ranges_regex_error_no_change() -> None:

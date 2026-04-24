@@ -76,7 +76,7 @@ class AboutDialog(QDialog):
 		card_layout.addWidget(claim)
 		card_layout.addWidget(subclaim)
 
-		link = QLabel('<a href="https://github.com/dasarne/grbl-visualizer">github.com/dasarne/grbl-visualizer</a>')
+		link = QLabel('<a href="https://github.com/dasarne/grbl-visualizer">github.com/dasarne/GCode-Lisa</a>')
 		link.setOpenExternalLinks(False)
 		link.linkActivated.connect(lambda url: QDesktopServices.openUrl(QUrl(url)))
 		link.setAlignment(Qt.AlignmentFlag.AlignCenter)

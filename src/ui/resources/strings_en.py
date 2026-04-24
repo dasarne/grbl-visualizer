@@ -99,6 +99,7 @@ STRINGS: dict[str, str] = {
     "find.replace_next": "Replace Next",
     "find.replace_all": "Replace All",
     "find.in_selection": "In Selection",
+    "find.case_sensitive": "Match Case",
     "find.find_placeholder": "Search term or regex pattern...",
     "find.replace_placeholder": "Replacement text...",
     "find.status.empty_search": "Empty search term",
@@ -121,7 +122,7 @@ STRINGS: dict[str, str] = {
         "GCode Lisa is developed as a focused G-Code tool for CNC workflows.<br><br>"
         "Development: Arne von Irmer and ChatGPT.<br>"
         "The project lives in the public repository "
-        '<a href="https://github.com/dasarne/grbl-visualizer">github.com/dasarne/grbl-visualizer</a>.<br>'
+        '<a href="https://github.com/dasarne/grbl-visualizer">github.com/dasarne/GCode-Lisa</a>.<br>'
         "Contributions are welcome."
     ),
     "about.license.text": (

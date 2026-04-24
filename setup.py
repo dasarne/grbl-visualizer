@@ -13,7 +13,6 @@ setup(
     entry_points={
         "console_scripts": [
             "gcode-lisa=src.main:main",
-            "grbl-visualizer=src.main:main",
         ],
     },
     install_requires=[

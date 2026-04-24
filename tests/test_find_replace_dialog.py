@@ -8,13 +8,13 @@ def test_enter_in_find_triggers_find_next(qtbot):
     dialog = FindReplaceDialog(language="en")
     qtbot.addWidget(dialog)
 
-    calls: list[tuple[str, bool, bool]] = []
-    dialog.find_next_requested.connect(lambda term, use_regex, in_sel: calls.append((term, use_regex, in_sel)))
+    calls: list[tuple[str, bool, bool, bool]] = []
+    dialog.find_next_requested.connect(lambda term, use_regex, in_sel, case_sens: calls.append((term, use_regex, in_sel, case_sens)))
 
     dialog._find_input.setText("G1")
     dialog._find_input.returnPressed.emit()
 
-    assert calls == [("G1", False, False)]
+    assert calls == [("G1", False, False, False)]
 
 
 def test_invalid_regex_while_typing_sets_error_and_clears_preview(qtbot):
@@ -22,8 +22,8 @@ def test_invalid_regex_while_typing_sets_error_and_clears_preview(qtbot):
     dialog = FindReplaceDialog(language="en")
     qtbot.addWidget(dialog)
 
-    previews: list[tuple[str, bool, bool]] = []
-    dialog.search_updated.connect(lambda term, use_regex, in_sel: previews.append((term, use_regex, in_sel)))
+    previews: list[tuple[str, bool, bool, bool]] = []
+    dialog.search_updated.connect(lambda term, use_regex, in_sel, case_sens: previews.append((term, use_regex, in_sel, case_sens)))
 
     dialog._regex_check.setChecked(True)
     dialog._find_input.setText("(")
@@ -40,3 +40,29 @@ def test_placeholders_are_localized(qtbot):
 
     assert dialog._find_input.placeholderText() == "Suchbegriff oder Regex-Muster..."
     assert dialog._replace_input.placeholderText() == "Ersetzungstext..."
+
+
+def test_case_sensitive_checkbox_present_and_localized(qtbot):
+    """Case sensitivity checkbox should be present with correct localized label."""
+    dialog_en = FindReplaceDialog(language="en")
+    qtbot.addWidget(dialog_en)
+    assert dialog_en._case_check.text() == "Match Case"
+
+    dialog_de = FindReplaceDialog(language="de")
+    qtbot.addWidget(dialog_de)
+    assert dialog_de._case_check.text() == "Groß-/Kleinschreibung"
+
+
+def test_case_sensitive_emitted_in_signal(qtbot):
+    """Enabling case-sensitive checkbox should emit True as last signal argument."""
+    dialog = FindReplaceDialog(language="en")
+    qtbot.addWidget(dialog)
+
+    calls: list[tuple[str, bool, bool, bool]] = []
+    dialog.find_next_requested.connect(lambda term, use_regex, in_sel, case_sens: calls.append((term, use_regex, in_sel, case_sens)))
+
+    dialog._case_check.setChecked(True)
+    dialog._find_input.setText("G1")
+    dialog._find_input.returnPressed.emit()
+
+    assert calls == [("G1", False, False, True)]
